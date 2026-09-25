@@ -1,0 +1,306 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Role and status come from the caller's own /users doc — not from a token custom
+    // claim — so the Super Admin can create users, change roles, and deactivate from
+    // the app with no server code. Every check also requires status == 'active', so a
+    // deactivated or deleted account loses access on its very next request.
+    function myUserPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function me() {
+      return get(myUserPath()).data;
+    }
+
+    function isStaff() {
+      return signedIn() && exists(myUserPath()) && me().status == 'active';
+    }
+
+    function role() {
+      return me().role;
+    }
+
+    function isSuperAdmin() {
+      return isStaff() && role() == 'superadmin';
+    }
+
+    function isAdminOrAbove() {
+      return isStaff() && role() in ['superadmin', 'admin'];
+    }
+
+    function isReceptionistOrAbove() {
+      return isStaff() && role() in ['superadmin', 'admin', 'receptionist'];
+    }
+
+    // Any active staff role, including Therapist — used only for the narrow set of
+    // reads/writes a Therapist needs (viewing a patient profile and its session logs,
+    // to record daily treatment progress). Therapist still has no access to
+    // billing/transactions, patient create/edit, or discharge.
+    function isTherapistOrAbove() {
+      return isStaff() && role() in ['superadmin', 'admin', 'receptionist', 'therapist'];
+    }
+
+    // Roles the Super Admin may assign from the app. Creating another Super Admin is
+    // deliberately excluded — that stays a provisioning-script operation.
+    function isAssignableRole(r) {
+      return r in ['admin', 'receptionist', 'therapist'];
+    }
+
+    // A charge/payment is backdated if its `date` isn't the moment the write itself
+    // happened. Non-backdated writes always pass `date: serverTimestamp()`, which
+    // resolves server-side to exactly request.time — so this is a precise check, not
+    // a heuristic, and it can't be spoofed by a client claiming "today" for a past date.
+    function isBackdated() {
+      return request.resource.data.date != request.time;
+    }
+
+    // Validates a public, unauthenticated inquiry submission (Booking/Contact forms).
+    // No login required to create, but the shape is locked down: only the listed fields,
+    // capped sizes on free-text fields, status forced to 'new', createdAt forced to be a
+    // genuine server timestamp — this is the only collection in the app writable without auth.
+    function isValidInquiry() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['type', 'name', 'phone', 'email', 'service', 'preferredDate', 'message', 'status', 'createdAt'])
+        && d.type in ['booking', 'contact']
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 200
+        && d.phone is string && d.phone.size() <= 30
+        && d.message is string && d.message.size() <= 2000
+        && d.status == 'new'
+        && d.createdAt == request.time;
+    }
+
+    // Same posture for the Careers form.
+    function isValidJobApplication() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['name', 'email', 'phone', 'roleAppliedFor', 'yearsOfExperience', 'coverNote', 'status', 'createdAt'])
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 200
+        && d.email is string && d.email.size() <= 200
+        && d.coverNote is string && d.coverNote.size() <= 2000
+        && d.status == 'new'
+        && d.createdAt == request.time;
+    }
+
+    // ── /users/{uid} ──
+    match /users/{uid} {
+      // Reading your own doc is allowed even when inactive, so the app can tell a
+      // deactivated user why they were signed out.
+      allow read: if signedIn() && (request.auth.uid == uid || isAdminOrAbove());
+
+      // Super Admin creates staff accounts from the app (the login itself is created
+      // client-side first). Only assignable roles, and always starting active.
+      allow create: if isSuperAdmin()
+        && uid != request.auth.uid
+        && isAssignableRole(request.resource.data.role)
+        && request.resource.data.status == 'active';
+
+      // Self: display name and notification read-state only — never your own role/status.
+      allow update: if isStaff() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'notificationState', 'updatedAt', 'updatedBy']);
+
+      // Super Admin manages every *other* non-Super-Admin account: role, status,
+      // departments, permission overrides. Never themselves (no self-lockout), never
+      // another Super Admin, and never the email (it must match the login).
+      allow update: if isSuperAdmin()
+        && uid != request.auth.uid
+        && resource.data.role != 'superadmin'
+        && isAssignableRole(request.resource.data.role)
+        && request.resource.data.status in ['active', 'disabled', 'deleted']
+        && request.resource.data.email == resource.data.email;
+
+      // "Delete" is status 'deleted' — the doc is kept so the same login/email can be
+      // restored later without the Admin SDK.
+      allow delete: if false;
+    }
+
+    // ── /userRequests/{id} ── (legacy request flow — approved or dismissed from the app)
+    match /userRequests/{id} {
+      allow read, create, update, delete: if isSuperAdmin();
+    }
+
+    // ── /roleDefaults/{role} ──
+    match /roleDefaults/{role} {
+      allow read: if isStaff();
+      allow write: if isSuperAdmin();
+    }
+
+    // ── /auditLogs/{id} ──
+    match /auditLogs/{id} {
+      allow read: if isSuperAdmin();
+      allow create: if isSuperAdmin() && request.resource.data.performedBy == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // ── /patients/{patientId} ──
+    match /patients/{patientId} {
+      // Deleting a patient moves them to the Trash (isDeleted: true) — nothing is ever
+      // erased. A trashed patient is frozen: no edits, discharge, billing or new session
+      // logs until a Super Admin restores them.
+      function patientTrashed() {
+        return resource.data.get('isDeleted', false) == true;
+      }
+      // The existence check matters: onboarding creates the patient and their first visit
+      // (and any advance payment) in one transaction, so the parent doesn't exist yet
+      // when those child writes are checked — and a brand-new patient isn't trashed.
+      function parentTrashed() {
+        let path = /databases/$(database)/documents/patients/$(patientId);
+        return exists(path) && get(path).data.get('isDeleted', false) == true;
+      }
+
+      allow read: if isTherapistOrAbove();
+      allow create: if isReceptionistOrAbove()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.get('isDeleted', false) == false;
+
+      // Trash / restore — Super Admin only, and only the trash bookkeeping fields change,
+      // so restoring puts the patient back exactly as they were.
+      allow update: if isSuperAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'isDeleted', 'deletedAt', 'deletedBy', 'restoredAt', 'restoredBy', 'updatedAt', 'updatedBy'
+        ])
+        && request.resource.data.isDeleted is bool;
+
+      // Split into purpose-scoped blocks (same multi-block-OR pattern as /users/{uid})
+      // instead of one unrestricted update — every write the app performs already fits
+      // one of these two shapes, so this narrows the rule without losing any real capability.
+      // (1) Profile edit: demographic fields only — never patientCode/currentStatus/
+      //     currentPatientType/advanceAmount/createdBy/createdAt.
+      allow update: if isReceptionistOrAbove()
+        && !patientTrashed()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'nameLower', 'age', 'gender', 'address',
+          'contact1', 'contact1Digits', 'contact2', 'contact2Digits',
+          'primaryDiagnosis', 'attenderName', 'attenderContact', 'attenderContactDigits',
+          'sessionFrequency', 'referredFromHospital', 'referringHospitalName',
+          'updatedBy', 'updatedAt'
+        ]);
+      // (2) Status transition: discharge or readmit — only these fields, and only to a
+      //     valid status. The zero-balance-before-discharge rule is enforced client-side
+      //     only (Firestore rules can't aggregate/sum the transactions subcollection, and
+      //     there's no Cloud Functions budget on this project to do it server-side).
+      allow update: if isReceptionistOrAbove()
+        && !patientTrashed()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['currentStatus', 'currentPatientType', 'updatedBy', 'updatedAt'])
+        && request.resource.data.currentStatus in ['active', 'discharged'];
+
+      // Patients are never permanently deleted — "Delete" moves them to the Trash.
+      allow delete: if false;
+
+      match /encounters/{encounterId} {
+        allow read: if isTherapistOrAbove();
+        allow create: if isReceptionistOrAbove() && request.resource.data.createdBy == request.auth.uid && !parentTrashed();
+        allow update: if isReceptionistOrAbove() && !parentTrashed();
+        allow delete: if false;
+      }
+
+      // Append-only financial ledger: a charge or a payment, corrections are new
+      // offsetting transactions per "never overwrite financial data" — update stays
+      // permanently disabled. Delete is Super-Admin-only, added per explicit instruction,
+      // same type-to-confirm UI gate as patient delete.
+      match /transactions/{transactionId} {
+        allow read: if isReceptionistOrAbove();
+        allow create: if isReceptionistOrAbove()
+          && request.resource.data.createdBy == request.auth.uid
+          && !parentTrashed()
+          && (!isBackdated() || isAdminOrAbove())
+          && (
+            request.resource.data.type != 'charge' ||
+            request.resource.data.netAmount == request.resource.data.amount - request.resource.data.discountAmount
+          );
+        // The amounts are still never editable. The only change allowed is Super Admin
+        // moving a bill to / restoring it from the Trash — and never while the patient
+        // itself is in the Trash (restore the patient first).
+        allow update: if isSuperAdmin()
+          && !parentTrashed()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isDeleted', 'deletedAt', 'deletedBy', 'restoredAt', 'restoredBy'])
+          && request.resource.data.isDeleted is bool;
+        // Bills are never permanently deleted — "Delete" moves them to the Trash.
+        allow delete: if false;
+      }
+
+      // Daily treatment progress. Unlike the financial ledger, this is clinical
+      // documentation, not money — typos and corrections are normal, so edit/delete is
+      // allowed (Admin+), not permanently locked.
+      match /sessionLogs/{logId} {
+        allow read: if isTherapistOrAbove();
+        allow create: if isTherapistOrAbove() && request.resource.data.recordedBy == request.auth.uid && !parentTrashed();
+        allow update: if isAdminOrAbove() && !parentTrashed();
+        allow delete: if isAdminOrAbove() && !parentTrashed();
+      }
+    }
+
+    // ── /counters/{counterId} ── (patient code sequence, incremented inside a client transaction)
+    match /counters/{counterId} {
+      allow read, write: if isReceptionistOrAbove();
+    }
+
+    // ── /departments/{id} ── (flat tree via parentId; not sensitive, readable by any staff)
+    match /departments/{id} {
+      allow read: if isStaff();
+      allow create, update: if isAdminOrAbove();
+      // Childless-node check happens app-side (rules can't query); this just gates the role.
+      allow delete: if isAdminOrAbove();
+    }
+
+    // ── /hospitalSettlements/{id} ── (hospital-covered inpatient-day accrual; never patient-facing)
+    match /hospitalSettlements/{id} {
+      allow read: if isAdminOrAbove();
+      allow create: if isAdminOrAbove() && request.resource.data.status == 'pending';
+      // Only the collection-status fields may ever change after creation — amount/date/
+      // patientId are permanent once accrued, protecting against a re-accrual overwrite bug.
+      allow update: if isAdminOrAbove()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'collectedAt', 'collectedBy', 'reference', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // ── /settings/{id} ── (e.g. hospitalDailyRate)
+    match /settings/{id} {
+      allow read: if isAdminOrAbove();
+      allow write: if isSuperAdmin();
+    }
+
+    // ── /inquiries/{id} ── (Booking + Contact form submissions — public write, staff-only read)
+    match /inquiries/{id} {
+      allow read: if isReceptionistOrAbove();
+      allow create: if isValidInquiry();
+      allow update: if isReceptionistOrAbove()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'updatedBy']);
+      // Deviates from this app's usual "never delete" stance: this collection is publicly
+      // writable and will attract spam, so Super Admin needs a way to clean it up.
+      allow delete: if isSuperAdmin();
+    }
+
+    // ── /jobApplications/{id} ── (Careers form — public write, staff-only read)
+    match /jobApplications/{id} {
+      allow read: if isReceptionistOrAbove();
+      allow create: if isValidJobApplication();
+      allow update: if isReceptionistOrAbove()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'updatedBy']);
+      allow delete: if isSuperAdmin();
+    }
+
+    // A nested `match` only grants access via its direct path — it does NOT cover
+    // collectionGroup() queries spanning every patient's transactions at once (used by
+    // the Reports dashboard). That needs its own top-level rule via the {path=**} wildcard.
+    // Writes still only ever happen through the direct path above.
+    match /{path=**}/transactions/{transactionId} {
+      allow read: if isReceptionistOrAbove();
+    }
+
+    // Same, for the cross-patient Therapy Sessions page and dashboard counts.
+    match /{path=**}/sessionLogs/{logId} {
+      allow read: if isTherapistOrAbove();
+    }
+
+    // Deny everything else by default.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

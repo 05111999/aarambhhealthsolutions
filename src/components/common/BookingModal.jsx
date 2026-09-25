@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Send } from 'lucide-react';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { X, Send, CalendarHeart } from 'lucide-react';
+import { db } from '../../lib/firebase';
 import Button from './Button';
 
 const BookingModal = ({ isOpen, onClose }) => {
@@ -13,6 +15,8 @@ const BookingModal = ({ isOpen, onClose }) => {
   });
 
   const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
 
   // Prevent background scrolling when modal is open
   useEffect(() => {
@@ -30,17 +34,32 @@ const BookingModal = ({ isOpen, onClose }) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    // Simulate API call
-    setTimeout(() => {
+    setError('');
+    setSubmitting(true);
+    try {
+      await addDoc(collection(db, 'inquiries'), {
+        type: 'booking',
+        name: formData.name.trim(),
+        phone: formData.phone.trim(),
+        service: formData.service,
+        preferredDate: formData.date,
+        message: formData.message.trim(),
+        status: 'new',
+        createdAt: serverTimestamp(),
+      });
       setSubmitted(true);
       setTimeout(() => {
         onClose();
         setSubmitted(false);
         setFormData({ name: '', phone: '', service: '', date: '', message: '' });
-      }, 2000);
-    }, 800);
+      }, 2500);
+    } catch {
+      setError('Something went wrong sending your request. Please try again or call us directly.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -59,11 +78,16 @@ const BookingModal = ({ isOpen, onClose }) => {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden pointer-events-auto"
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto pointer-events-auto"
             >
-              <div className="flex justify-between items-center p-6 border-b border-border bg-bg">
-                <h3 className="text-xl font-bold text-primary mb-0">Book a Consultation</h3>
-                <button 
+              <div className="flex justify-between items-center p-6 border-b border-border bg-bg sticky top-0 rounded-t-2xl z-10">
+                <div className="flex items-center gap-3">
+                  <div className="bg-gradient-to-br from-primary to-teal p-2.5 rounded-xl">
+                    <CalendarHeart size={20} className="text-white" />
+                  </div>
+                  <h3 className="text-xl font-bold text-text-dark mb-0">Book a Consultation</h3>
+                </div>
+                <button
                   onClick={onClose}
                   className="text-text-muted hover:text-text-dark transition-colors p-1"
                 >
@@ -74,8 +98,8 @@ const BookingModal = ({ isOpen, onClose }) => {
               <div className="p-6">
                 {submitted ? (
                   <div className="text-center py-8">
-                    <div className="w-16 h-16 bg-teal/20 text-teal rounded-full flex items-center justify-center mx-auto mb-4">
-                      <Send size={32} />
+                    <div className="w-16 h-16 bg-gradient-to-br from-primary to-teal text-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg shadow-teal/20">
+                      <Send size={28} />
                     </div>
                     <h3 className="text-2xl font-semibold mb-2">Request Sent!</h3>
                     <p className="text-text-muted">
@@ -152,9 +176,11 @@ const BookingModal = ({ isOpen, onClose }) => {
                       ></textarea>
                     </div>
 
+                    {error && <p className="text-sm text-red-600">{error}</p>}
+
                     <div className="pt-2">
-                      <Button type="submit" className="w-full" icon={Send}>
-                        Submit Request
+                      <Button type="submit" className="w-full" icon={Send} disabled={submitting}>
+                        {submitting ? 'Sending…' : 'Submit Request'}
                       </Button>
                     </div>
                   </form>

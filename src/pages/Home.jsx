@@ -1,145 +1,226 @@
 import React from 'react';
+import CountUp from 'react-countup';
 import autismHero from '../assets/autism.jpeg';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
-import { Activity, Building2, Stethoscope, Award, ShieldCheck, Heart, Star, CheckCircle, ArrowRight, Play, Users, Clock, Sparkles } from 'lucide-react';
+import { Activity, Building2, Stethoscope, Award, ShieldCheck, Heart, Star, CheckCircle, ArrowRight, Play, BadgeCheck } from 'lucide-react';
 import Button from '../components/common/Button';
 import SectionHeader from '../components/common/SectionHeader';
 import CtaBanner from '../components/common/CtaBanner';
 import Accordion from '../components/common/Accordion';
 import { services, testimonials, faqs } from '../data/mockData';
-
-const fadeUp = {
-  hidden: { opacity: 0, y: 40 },
-  visible: (i = 0) => ({
-    opacity: 1,
-    y: 0,
-    transition: { duration: 0.6, delay: i * 0.1, ease: [0.25, 0.46, 0.45, 0.94] }
-  })
-};
-
-const staggerContainer = {
-  hidden: {},
-  visible: { transition: { staggerChildren: 0.08 } }
-};
+import { fadeUp, staggerContainer } from '../lib/motion';
 
 const Home = ({ onBookClick }) => {
   return (
     <div className="w-full overflow-hidden">
 
       {/* ─── 1. HERO ─── */}
-      <section className="relative min-h-[92vh] flex items-center overflow-hidden">
-        {/* Background Image with Overlay */}
-        <div className="absolute inset-0 z-0">
-          <img
-            src={autismHero}
-            alt="Rehabilitation therapy session"
-            className="w-full h-full object-cover"
-          />
-          <div className="absolute inset-0 bg-gradient-to-r from-[#0A2540]/90 via-[#0A2540]/70 to-transparent" />
-          <div className="absolute inset-0 bg-gradient-to-t from-[#0A2540]/40 to-transparent" />
-        </div>
+      <section className="relative overflow-hidden bg-bg pt-16 pb-28 lg:pt-20 lg:pb-32">
+        {/* Dot-grid texture */}
+        <div
+          className="absolute inset-0 opacity-60 [mask-image:radial-gradient(ellipse_65%_55%_at_50%_20%,#000_60%,transparent_100%)]"
+          style={{ backgroundImage: 'radial-gradient(circle, #0A6EBD26 1px, transparent 1px)', backgroundSize: '28px 28px' }}
+        />
 
-        {/* Decorative Elements */}
-        <div className="absolute top-20 right-20 w-72 h-72 bg-teal/20 rounded-full blur-3xl animate-pulse" />
-        <div className="absolute bottom-20 left-20 w-96 h-96 bg-primary/15 rounded-full blur-3xl" />
+        {/* Ambient gradient blobs */}
+        <motion.div
+          animate={{ y: [0, -18, 0] }}
+          transition={{ duration: 8, repeat: Infinity, ease: 'easeInOut' }}
+          className="absolute -top-10 right-[8%] w-80 h-80 bg-teal/20 rounded-full blur-3xl"
+        />
+        <motion.div
+          animate={{ y: [0, 16, 0] }}
+          transition={{ duration: 9, repeat: Infinity, ease: 'easeInOut', delay: 0.5 }}
+          className="absolute bottom-0 left-[4%] w-96 h-96 bg-primary/10 rounded-full blur-3xl"
+        />
 
         <div className="container mx-auto px-4 relative z-10">
-          <div className="max-w-3xl">
-            <motion.div
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5 }}
-              className="inline-flex items-center gap-2 bg-white/10 backdrop-blur-sm border border-white/20 rounded-full px-5 py-2 mb-8"
-            >
-              <Sparkles size={14} className="text-teal" />
-              <span className="text-white/90 text-sm font-medium">Trusted by 500+ patients across Odisha</span>
-            </motion.div>
+          <div className="grid grid-cols-1 lg:grid-cols-[1.05fr_0.95fr] gap-14 lg:gap-10 items-center">
 
-            <motion.h1
-              initial={{ opacity: 0, y: 30 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.7, delay: 0.1 }}
-              className="text-white text-[clamp(36px,5vw,60px)] leading-[1.1] font-bold mb-6"
-            >
-              A New Beginning in{' '}
-              <span className="relative">
-                <span className="relative z-10 bg-gradient-to-r from-teal to-[#4dd0e1] bg-clip-text text-transparent">
-                  Rehabilitation
+            {/* ── Left: Copy ── */}
+            <div className="max-w-2xl">
+              <motion.div
+                initial={{ opacity: 0, y: -16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5 }}
+                className="inline-flex items-center gap-2.5 bg-white border border-border rounded-full pl-3 pr-5 py-1.5 mb-7 shadow-sm shadow-primary/5"
+              >
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-teal" />
                 </span>
-              </span>{' '}
-              Care
-            </motion.h1>
+                <span className="text-text-dark text-sm font-medium">Now accepting new patients in Bhubaneswar</span>
+              </motion.div>
 
-            <motion.p
-              initial={{ opacity: 0, y: 30 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.7, delay: 0.2 }}
-              className="text-white/75 text-lg md:text-xl mb-10 max-w-xl leading-relaxed"
-            >
-              Compassionate, ethical, and highly professional rehabilitation services.
-              Our multidisciplinary team helps you achieve optimal health and independence.
-            </motion.p>
+              <motion.h1
+                initial={{ opacity: 0, y: 24 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.7, delay: 0.1 }}
+                className="text-text-dark text-[clamp(38px,5vw,58px)] leading-[1.08] font-bold mb-6 text-balance"
+              >
+                Your Journey to{' '}
+                <span className="relative inline-block">
+                  <span className="relative z-10 bg-gradient-to-r from-primary via-light-blue to-teal bg-clip-text text-transparent">
+                    Recovery
+                  </span>
+                  <svg className="absolute -bottom-1 left-0 w-full" height="10" viewBox="0 0 200 10" preserveAspectRatio="none">
+                    <path d="M0,7 Q50,0 100,5 T200,4" stroke="url(#heroUnderline)" strokeWidth="4" fill="none" strokeLinecap="round" />
+                    <defs>
+                      <linearGradient id="heroUnderline" x1="0" y1="0" x2="1" y2="0">
+                        <stop offset="0%" stopColor="#0A6EBD" />
+                        <stop offset="100%" stopColor="#05AB9D" />
+                      </linearGradient>
+                    </defs>
+                  </svg>
+                </span>{' '}
+                Starts Here
+              </motion.h1>
 
+              <motion.p
+                initial={{ opacity: 0, y: 24 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.7, delay: 0.2 }}
+                className="text-text-muted text-lg md:text-xl mb-9 leading-relaxed"
+              >
+                Compassionate, evidence-based rehabilitation from a multidisciplinary team
+                dedicated to helping you regain strength, independence, and confidence —
+                one session at a time.
+              </motion.p>
+
+              <motion.div
+                initial={{ opacity: 0, y: 24 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.7, delay: 0.3 }}
+                className="flex flex-col sm:flex-row gap-4 mb-12"
+              >
+                <button
+                  onClick={onBookClick}
+                  className="inline-flex items-center justify-center gap-2 bg-gradient-to-r from-primary to-teal text-white font-semibold px-8 py-4 rounded-xl hover:shadow-xl hover:shadow-primary/25 transition-all duration-300 hover:-translate-y-0.5"
+                >
+                  Book Free Consultation
+                  <ArrowRight size={18} />
+                </button>
+                <Link
+                  to="/services"
+                  className="inline-flex items-center justify-center gap-2 bg-white border border-border text-text-dark font-semibold px-8 py-4 rounded-xl hover:border-primary/30 hover:bg-primary/5 transition-all duration-300"
+                >
+                  <Play size={14} className="fill-primary text-primary" />
+                  Explore Services
+                </Link>
+              </motion.div>
+
+              {/* Animated stat row + social proof */}
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.5, duration: 0.8 }}
+                className="flex flex-wrap items-center gap-x-10 gap-y-6 pt-8 border-t border-border"
+              >
+                <div>
+                  <p className="text-text-dark font-bold text-2xl leading-none">
+                    <CountUp end={500} duration={2} delay={0.6} suffix="+" />
+                  </p>
+                  <p className="text-text-muted text-xs mt-1.5">Patients Served</p>
+                </div>
+                <div>
+                  <p className="text-text-dark font-bold text-2xl leading-none">
+                    <CountUp end={5} duration={2} delay={0.6} suffix="+ Yrs" />
+                  </p>
+                  <p className="text-text-muted text-xs mt-1.5">Experience</p>
+                </div>
+                <div>
+                  <p className="text-text-dark font-bold text-2xl leading-none flex items-center gap-1">
+                    <CountUp end={4.9} decimals={1} duration={2} delay={0.6} />
+                    <Star size={16} className="text-teal fill-teal" />
+                  </p>
+                  <p className="text-text-muted text-xs mt-1.5">Patient Rating</p>
+                </div>
+
+                <div className="flex items-center gap-3 sm:ml-auto">
+                  <div className="flex -space-x-3">
+                    {[
+                      { i: 'R', c: 'from-primary to-light-blue' },
+                      { i: 'S', c: 'from-teal to-[#4dd0e1]' },
+                      { i: 'A', c: 'from-light-blue to-teal' },
+                      { i: 'M', c: 'from-primary to-teal' },
+                    ].map((a, idx) => (
+                      <div
+                        key={idx}
+                        className={`w-9 h-9 rounded-full bg-gradient-to-br ${a.c} border-2 border-white flex items-center justify-center text-white text-xs font-bold shadow-sm`}
+                      >
+                        {a.i}
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-text-muted text-xs leading-tight">
+                    Joined by <span className="text-text-dark font-semibold">40+ families</span><br />this month
+                  </p>
+                </div>
+              </motion.div>
+            </div>
+
+            {/* ── Right: Visual ── */}
             <motion.div
-              initial={{ opacity: 0, y: 30 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.7, delay: 0.3 }}
-              className="flex flex-col sm:flex-row gap-4"
+              initial={{ opacity: 0, scale: 0.94 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.8, delay: 0.2, ease: [0.25, 0.46, 0.45, 0.94] }}
+              className="relative mx-auto max-w-md lg:max-w-none"
             >
-              <button
-                onClick={onBookClick}
-                className="inline-flex items-center justify-center gap-2 bg-gradient-to-r from-teal to-primary text-white font-semibold px-8 py-4 rounded-xl hover:shadow-lg hover:shadow-teal/25 transition-all duration-300 hover:-translate-y-0.5"
+              {/* Rotating dashed ring */}
+              <motion.svg
+                animate={{ rotate: 360 }}
+                transition={{ duration: 26, repeat: Infinity, ease: 'linear' }}
+                viewBox="0 0 200 200"
+                className="absolute -top-10 -right-10 w-40 h-40 text-teal/30 hidden sm:block"
               >
-                Book Free Consultation
-                <ArrowRight size={18} />
-              </button>
-              <Link
-                to="/services"
-                className="inline-flex items-center justify-center gap-2 bg-white/10 backdrop-blur-sm border border-white/20 text-white font-semibold px-8 py-4 rounded-xl hover:bg-white/20 transition-all duration-300"
+                <circle cx="100" cy="100" r="92" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="4 8" />
+              </motion.svg>
+
+              {/* Blurred accents behind image */}
+              <div className="absolute -inset-3 bg-gradient-to-br from-primary/15 to-teal/15 rounded-[2.5rem] blur-xl" />
+
+              <div className="relative rounded-[2rem] overflow-hidden border-[6px] border-white shadow-2xl shadow-primary/15">
+                <img
+                  src={autismHero}
+                  alt="Therapist guiding children through a rehabilitation session"
+                  className="w-full h-[420px] sm:h-[480px] lg:h-[540px] object-cover"
+                />
+              </div>
+
+              {/* Floating card: certified team */}
+              <motion.div
+                initial={{ opacity: 0, x: -20, y: 10 }}
+                animate={{ opacity: 1, x: 0, y: 0 }}
+                transition={{ delay: 0.9, duration: 0.6 }}
+                className="absolute -left-4 sm:-left-8 top-8 bg-white/90 backdrop-blur-md rounded-2xl shadow-xl shadow-primary/10 border border-border/60 p-4 flex items-center gap-3 max-w-[220px]"
               >
-                <Play size={16} className="fill-white" />
-                Explore Services
-              </Link>
+                <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-primary to-teal flex items-center justify-center flex-shrink-0">
+                  <BadgeCheck size={22} className="text-white" />
+                </div>
+                <div>
+                  <p className="text-text-dark font-bold text-sm leading-tight">Certified Therapists</p>
+                  <p className="text-text-muted text-xs mt-0.5">Licensed &amp; specialised</p>
+                </div>
+              </motion.div>
+
+              {/* Floating card: rating */}
+              <motion.div
+                initial={{ opacity: 0, x: 20, y: 10 }}
+                animate={{ opacity: 1, x: 0, y: 0 }}
+                transition={{ delay: 1.1, duration: 0.6 }}
+                className="absolute -right-4 sm:-right-8 bottom-8 bg-white/90 backdrop-blur-md rounded-2xl shadow-xl shadow-primary/10 border border-border/60 p-4 max-w-[200px]"
+              >
+                <div className="flex text-teal gap-0.5 mb-1.5">
+                  {[...Array(5)].map((_, j) => (
+                    <Star key={j} size={13} className="fill-teal" />
+                  ))}
+                </div>
+                <p className="text-text-dark font-bold text-sm leading-tight">4.9 out of 5</p>
+                <p className="text-text-muted text-xs mt-0.5">From 500+ happy families</p>
+              </motion.div>
             </motion.div>
 
-            {/* Trust badges */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.6, duration: 0.8 }}
-              className="flex items-center gap-8 mt-14 pt-8 border-t border-white/10"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-teal/20 flex items-center justify-center">
-                  <Users size={18} className="text-teal" />
-                </div>
-                <div>
-                  <p className="text-white font-bold text-lg leading-none">500+</p>
-                  <p className="text-white/50 text-xs mt-0.5">Patients Served</p>
-                </div>
-              </div>
-              <div className="w-px h-10 bg-white/10" />
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
-                  <Clock size={18} className="text-[#4dd0e1]" />
-                </div>
-                <div>
-                  <p className="text-white font-bold text-lg leading-none">5+ Yrs</p>
-                  <p className="text-white/50 text-xs mt-0.5">Experience</p>
-                </div>
-              </div>
-              <div className="w-px h-10 bg-white/10 hidden sm:block" />
-              <div className="hidden sm:flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-teal/20 flex items-center justify-center">
-                  <Star size={18} className="text-teal fill-teal" />
-                </div>
-                <div>
-                  <p className="text-white font-bold text-lg leading-none">4.9/5</p>
-                  <p className="text-white/50 text-xs mt-0.5">Patient Rating</p>
-                </div>
-              </div>
-            </motion.div>
           </div>
         </div>
       </section>
