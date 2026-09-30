@@ -13,7 +13,7 @@ import { roundMoney } from '../billing/money';
 export function usePatientBalance(patientId, enabled = true) {
   // Shared live source — PatientLedger reads the same listener, so a profile visit
   // downloads the ledger once rather than twice.
-  const { data, loaded } = useLiveSource(enabled ? patientTransactionsSource(patientId) : null);
+  const { data, loaded, error } = useLiveSource(enabled ? patientTransactionsSource(patientId) : null);
   // Bills in the Trash don't count toward the balance (or the discharge check).
   const transactions = useMemo(() => (data || []).filter((t) => !t.isDeleted), [data]);
   const loading = enabled && !!patientId && !loaded;
@@ -22,5 +22,6 @@ export function usePatientBalance(patientId, enabled = true) {
     transactions.reduce((sum, t) => (t.type === 'payment' ? sum + roundMoney(t.amount) : sum - roundMoney(t.netAmount)), 0)
   );
 
-  return { balance, hasPendingDues: balance < 0, loading };
+  // `error`: the ledger couldn't be read, so the balance is unknown (not ₹0).
+  return { balance, hasPendingDues: balance < 0, loading, error: enabled && !!error };
 }

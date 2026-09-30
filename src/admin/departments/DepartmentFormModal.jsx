@@ -12,6 +12,7 @@ const inputClasses =
 const DepartmentFormModal = ({ isOpen, onClose, onSubmit, parentName, node }) => {
   const [form, setForm] = useState(emptyForm);
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     if (node) {
@@ -24,10 +25,12 @@ const DepartmentFormModal = ({ isOpen, onClose, onSubmit, parentName, node }) =>
     } else {
       setForm(emptyForm);
     }
+    setError('');
   }, [node, isOpen]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setError('');
     setSubmitting(true);
     try {
       await onSubmit({
@@ -37,6 +40,8 @@ const DepartmentFormModal = ({ isOpen, onClose, onSubmit, parentName, node }) =>
         isActive: form.isActive,
       });
       onClose();
+    } catch (err) {
+      setError(err.message || 'Could not save. Please try again.');
     } finally {
       setSubmitting(false);
     }
@@ -116,6 +121,8 @@ const DepartmentFormModal = ({ isOpen, onClose, onSubmit, parentName, node }) =>
                     Active
                   </label>
                 )}
+
+                {error && <p className="text-sm text-red-600">{error}</p>}
 
                 <button
                   type="submit"

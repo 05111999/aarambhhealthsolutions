@@ -428,9 +428,9 @@ export const ARTICLES = [
     steps: [
       { title: 'Start a new bill', text: 'Click “Bills” then “Create Bill” — or click “Create Bill” on the patient’s profile (the patient is filled in for you).', visual: { nav: 'Bills' } },
       { title: 'Click “Create Bill”', text: '', visual: { button: 'Create Bill', icon: 'FilePlus', variant: 'primary' } },
-      { title: '① Patient', text: 'The form is in numbered sections (side by side on a computer). Search and choose the patient. You can adjust the name, phone and address printed on the bill.', visual: { fields: [{ label: 'Name on bill' }, { label: 'Phone' }, { label: 'Address' }, { label: 'City / State / PIN' }] } },
-      { title: '② Hospital & Physician', text: 'The hospital is picked for you from the patient (their referring hospital, or your own hospital for direct patients). Choose the prescribing physician (therapist) if any.', visual: { fields: [{ label: 'Hospital', required: true }, { label: 'Prescribing physician (therapist)' }] } },
-      { title: '③ Services', text: 'Choose a department and a service, then click “Add” — the price fills in. Use “Custom item” for anything not in the catalog. Each line shows Item, Description and Price in one row.', visual: { button: 'Add', icon: 'Plus', variant: 'primary' } },
+      { title: '① Patient', text: 'The form is in numbered sections (side by side on a computer). Type any part of the patient’s name, code or phone — results appear as you type (↑ ↓ and Enter work too). Once chosen, only the name shows; click “Change” to adjust the name, phone and address printed on the bill, or to choose a different patient.', visual: { fields: [{ label: 'Name on bill' }, { label: 'Phone' }, { label: 'Address' }, { label: 'City / State / PIN' }] } },
+      { title: '② Hospital & Physician', text: 'The hospital is picked for you from the patient (their referring hospital, or your own hospital for direct patients), and the physician from their assigned therapist. The box then shows just the two names — click the arrow to open it and change them.', visual: { fields: [{ label: 'Hospital', required: true }, { label: 'Prescribing physician (therapist)' }] } },
+      { title: '③ Services', text: 'Start typing a service — suggestions appear below; picking one fills in its department too. Click “Add” (or press Enter) — the price fills in. Choose a department first to see only its services. Use “Custom item” for anything not in the catalog.', visual: { button: 'Add', icon: 'Plus', variant: 'primary' } },
       { title: '④ Dates and ⑤ Discount, Tax & Notes', text: 'Set the due date. Enter a discount if allowed (% or ₹). Tax is applied automatically. Add notes if needed. The Bill Summary box shows the total, and the live preview below the form shows the bill as you type.', visual: { fields: [{ label: 'Discount' }, { label: 'Tax' }, { label: 'Notes' }] } },
       { title: 'Click “Save Bill”', text: 'It is in the Bill Summary box.', visual: { button: 'Save Bill', icon: 'Save', variant: 'primary' } },
     ],
@@ -449,12 +449,12 @@ export const ARTICLES = [
     when: 'While creating or editing a bill.',
     keywords: ['items', 'services', 'add service', 'custom item', 'price', 'line'],
     steps: [
-      { title: 'Pick a department, then a service', text: 'Only services that have a price appear. Click “Add”.', visual: { button: 'Add', icon: 'Plus', variant: 'primary' } },
+      { title: 'Type a service and pick a suggestion', text: 'Suggestions appear as you type, from every department (its department fills in for you). Optionally choose a department first to narrow the list. Only services that have a price appear. Click “Add” or press Enter.', visual: { button: 'Add', icon: 'Plus', variant: 'primary' } },
       { title: 'Or click “Custom item”', text: 'A blank line appears — type the item, description and price.', visual: { button: 'Custom item', icon: 'Plus', variant: 'link' } },
       { title: 'Edit or remove lines', text: 'Each line has Item, Description and Price side by side — change them directly; the bin at the end of the line removes it.' },
     ],
     result: 'The subtotal and total update as you go.',
-    tips: ['“No priced services” means the department has no prices yet — ask the Super Admin to set prices in Departments.'],
+    tips: ['“No priced services in this department” means it has no prices yet — ask the Super Admin to set prices in Departments.'],
     related: ['bill-create', 'services-manage'],
   },
   {

@@ -56,7 +56,9 @@ const PatientProfile = () => {
   const [showReadmitModal, setShowReadmitModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
 
-  const { balance, hasPendingDues } = usePatientBalance(patientId, canViewBilling);
+  // Anyone who can discharge needs the balance too — without it the pending-dues check
+  // below would see ₹0 and let a patient with unpaid bills be discharged.
+  const { balance, hasPendingDues, loading: balanceLoading, error: balanceError } = usePatientBalance(patientId, canViewBilling || canDischarge);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(doc(db, 'patients', patientId), (snap) => {
@@ -81,6 +83,11 @@ const PatientProfile = () => {
     const activeEncounter = encounters.find((e) => e.status === 'active');
     if (!activeEncounter) return;
     setDischargeError('');
+    if (balanceLoading) return;
+    if (balanceError) {
+      setDischargeError('Could not check this patient’s balance, so they can’t be discharged yet. Reload and try again.');
+      return;
+    }
     if (hasPendingDues) {
       setDischargeError(`Cannot discharge — patient has pending dues of ${formatMoney(Math.abs(balance))}. Clear the balance first.`);
       return;
@@ -101,6 +108,8 @@ const PatientProfile = () => {
         updatedAt: serverTimestamp(),
       });
       await batch.commit();
+    } catch (err) {
+      setDischargeError(err.message || 'Could not discharge the patient. Please try again.');
     } finally {
       setProcessing(false);
     }
@@ -225,7 +234,7 @@ const PatientProfile = () => {
           {canDischarge && patient.currentStatus === 'active' && (
             <button
               onClick={handleDischarge}
-              disabled={processing || hasPendingDues}
+              disabled={processing || balanceLoading || hasPendingDues}
               title={hasPendingDues ? 'Clear pending dues before discharging' : undefined}
               className="inline-flex items-center gap-2 bg-white border border-border text-text-dark font-semibold px-5 py-2.5 rounded-lg hover:border-red-300 hover:text-red-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:border-border disabled:hover:text-text-dark"
             >

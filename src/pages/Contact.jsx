@@ -116,18 +116,18 @@ const Contact = () => {
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
                           <label className="block text-sm font-medium text-text-dark mb-1">Your Name *</label>
-                          <input type="text" name="name" value={form.name} onChange={handleChange} className={inputClasses} required />
+                          <input type="text" name="name" maxLength={200} value={form.name} onChange={handleChange} className={inputClasses} required />
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-text-dark mb-1">Phone Number *</label>
-                          <input type="tel" name="phone" value={form.phone} onChange={handleChange} className={inputClasses} required />
+                          <input type="tel" name="phone" maxLength={30} value={form.phone} onChange={handleChange} className={inputClasses} required />
                         </div>
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div>
                           <label className="block text-sm font-medium text-text-dark mb-1">Email Address</label>
-                          <input type="email" name="email" value={form.email} onChange={handleChange} className={inputClasses} />
+                          <input type="email" name="email" maxLength={200} value={form.email} onChange={handleChange} className={inputClasses} />
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-text-dark mb-1">Service of Interest</label>
@@ -147,7 +147,7 @@ const Contact = () => {
                       <div>
                         <label className="block text-sm font-medium text-text-dark mb-1">Your Message *</label>
                         <textarea
-                          name="message"
+                          name="message" maxLength={2000}
                           value={form.message}
                           onChange={handleChange}
                           rows="5"

@@ -9,9 +9,11 @@ const MarkCollectedModal = ({ isOpen, onClose, entry }) => {
   const { user } = useAuth();
   const [reference, setReference] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setError('');
     setSubmitting(true);
     try {
       await updateDoc(doc(db, 'hospitalSettlements', entry.id), {
@@ -23,6 +25,8 @@ const MarkCollectedModal = ({ isOpen, onClose, entry }) => {
       });
       setReference('');
       onClose();
+    } catch (err) {
+      setError(err.message || 'Could not mark this entry as collected. Please try again.');
     } finally {
       setSubmitting(false);
     }
@@ -72,6 +76,8 @@ const MarkCollectedModal = ({ isOpen, onClose, entry }) => {
                     className="w-full px-4 py-2 border border-border rounded-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
                   />
                 </div>
+
+                {error && <p className="text-sm text-red-600">{error}</p>}
 
                 <button
                   type="submit"

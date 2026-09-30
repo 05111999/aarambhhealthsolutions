@@ -231,10 +231,24 @@ service cloud.firestore {
         // Onboarding creates the first visit; readmitting creates a new one.
         allow create: if (isReceptionistOrAbove() || can('patients', 'create') || can('patients', 'dischargeOrClose'))
           && request.resource.data.createdBy == request.auth.uid && !parentTrashed();
-        // Discharge closes a visit; admission details are a patient edit; IPD charges
-        // advance the admission's bill number / charge counter.
-        allow update: if (isReceptionistOrAbove() || can('patients', 'dischargeOrClose') || can('patients', 'edit') || canAddIpdCharges())
-          && !parentTrashed();
+        allow update: if isReceptionistOrAbove() && !parentTrashed();
+        // Permission-override grants, each limited to the fields its screen writes:
+        // discharge closes the visit…
+        allow update: if can('patients', 'dischargeOrClose') && !parentTrashed()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'closedAt', 'updatedBy', 'updatedAt']);
+        // …editing a patient covers the IPD admission details…
+        allow update: if can('patients', 'edit') && !parentTrashed()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'ward', 'roomBed', 'treatingDoctor', 'expectedDischargeDate', 'updatedBy', 'updatedAt'
+          ]);
+        // …adding IPD charges advances the admission's charge counter…
+        allow update: if canAddIpdCharges() && !parentTrashed()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['chargeSeq'])
+          && request.resource.data.chargeSeq > resource.data.get('chargeSeq', 0);
+        // …and opening an IPD account assigns its bill number the first time it's viewed.
+        allow update: if can('billing', 'view') && !parentTrashed()
+          && !('admissionNumber' in resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['admissionNumber', 'chargeSeq']);
         // Only when permanently deleting a patient who is in the Trash.
         allow delete: if isSuperAdmin() && parentTrashed();
       }
@@ -243,7 +257,9 @@ service cloud.firestore {
       // entry to the Trash). The only edits allowed are the narrow, Admin+ corrections
       // below (bill-linked charges, IPD charges, payment details), each audit-logged.
       match /transactions/{transactionId} {
-        allow read: if isReceptionistOrAbove() || can('billing', 'view');
+        // Discharging needs the balance (no discharge with pending dues), so whoever
+        // may discharge can read this patient's ledger too.
+        allow read: if isReceptionistOrAbove() || can('billing', 'view') || can('patients', 'dischargeOrClose');
         allow create: if isReceptionistOrAbove()
           && request.resource.data.createdBy == request.auth.uid
           && !parentTrashed()
@@ -263,9 +279,12 @@ service cloud.firestore {
           && request.resource.data.netAmount == request.resource.data.amount - request.resource.data.discountAmount
           && getAfter(/databases/$(database)/documents/bills/$(request.resource.data.billId)).data.total == request.resource.data.netAmount;
         // A payment by someone granted "Record a patient payment" — or the advance taken
-        // while onboarding a patient, by someone granted "Onboard new patients".
+        // while onboarding a patient, by someone granted "Onboard new patients" (only for
+        // a patient being created in this same write, never an existing one).
         allow create: if (can('billing', 'recordPayment')
-            || (can('patients', 'create') && request.resource.data.get('method', null) == 'advance'))
+            || (can('patients', 'create')
+                && request.resource.data.get('method', null) == 'advance'
+                && !exists(/databases/$(database)/documents/patients/$(patientId))))
           && request.resource.data.createdBy == request.auth.uid
           && !parentTrashed()
           && (!isBackdated() || can('billing', 'backdate'))
@@ -344,7 +363,7 @@ service cloud.firestore {
       // Counters behind actions a Super Admin granted as a Permission Override.
       allow read, write: if counterId.matches('patientCode_.*') && can('patients', 'create');
       allow read, write: if counterId.matches('receipts_.*') && (can('billing', 'recordPayment') || can('patients', 'create'));
-      allow read, write: if counterId.matches('admissions_.*') && canAddIpdCharges();
+      allow read, write: if counterId.matches('admissions_.*') && can('billing', 'view');
     }
 
     // ── /hospitals/{id} ── (partner hospitals that brand a bill; managed by Super Admin)

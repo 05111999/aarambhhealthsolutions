@@ -23,6 +23,7 @@ const DepartmentTree = () => {
   const { data: nodeData } = useLiveSource(SOURCES.departments);
   const nodes = nodeData || [];
   const [modal, setModal] = useState(null); // { parent } | { node } | null
+  const [deleteError, setDeleteError] = useState('');
   const [{ filter }, setFilters] = useUrlFilters({ filter: '' });
   const activeFilter = DEPARTMENT_FILTERS.some((f) => f.value === filter) ? filter : '';
 
@@ -58,7 +59,12 @@ const DepartmentTree = () => {
     const hasChildren = nodes.some((n) => n.parentId === node.id);
     if (hasChildren) return; // guarded by disabled button too; defensive no-op
     if (!window.confirm(`Delete "${node.name}"? This can't be undone.`)) return;
-    await deleteDoc(doc(db, 'departments', node.id));
+    setDeleteError('');
+    try {
+      await deleteDoc(doc(db, 'departments', node.id));
+    } catch (err) {
+      setDeleteError(`Could not delete "${node.name}": ${err.message}`);
+    }
   };
 
   return (
@@ -78,6 +84,12 @@ const DepartmentTree = () => {
           </button>
         )}
       </div>
+
+      {deleteError && (
+        <div className="mb-6 bg-red-50 border border-red-100 text-red-600 text-sm font-medium px-4 py-2.5 rounded-lg">
+          {deleteError}
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <button onClick={() => setFilters({ filter: '' })} className={chipClass(!activeFilter)}>

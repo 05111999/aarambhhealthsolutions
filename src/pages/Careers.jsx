@@ -47,8 +47,8 @@ const Careers = () => {
       setSubmitted(true);
       setForm(emptyForm);
       setSelectedJob('');
-    } catch (err) {
-      setError(err.message || 'Something went wrong submitting your application. Please try again.');
+    } catch {
+      setError('Something went wrong submitting your application. Please try again, or email us directly.');
     } finally {
       setSubmitting(false);
     }
@@ -162,17 +162,17 @@ const Careers = () => {
                   <form className="space-y-5" onSubmit={handleSubmit}>
                     <div>
                       <label className="block text-sm font-medium text-text-dark mb-1">Full Name *</label>
-                      <input type="text" name="name" value={form.name} onChange={handleChange} className={inputClasses} required />
+                      <input type="text" name="name" maxLength={200} value={form.name} onChange={handleChange} className={inputClasses} required />
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                       <div>
                         <label className="block text-sm font-medium text-text-dark mb-1">Email *</label>
-                        <input type="email" name="email" value={form.email} onChange={handleChange} className={inputClasses} required />
+                        <input type="email" name="email" maxLength={200} value={form.email} onChange={handleChange} className={inputClasses} required />
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-text-dark mb-1">Phone *</label>
-                        <input type="tel" name="phone" value={form.phone} onChange={handleChange} className={inputClasses} required />
+                        <input type="tel" name="phone" maxLength={30} value={form.phone} onChange={handleChange} className={inputClasses} required />
                       </div>
                     </div>
 
@@ -202,7 +202,7 @@ const Careers = () => {
                     <div>
                       <label className="block text-sm font-medium text-text-dark mb-1">Cover Note</label>
                       <textarea
-                        name="coverNote"
+                        name="coverNote" maxLength={2000}
                         value={form.coverNote}
                         onChange={handleChange}
                         rows="3"

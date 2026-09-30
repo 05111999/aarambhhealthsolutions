@@ -11,6 +11,9 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [roleDefaults, setRoleDefaults] = useState({});
+  // The uid whose role defaults have arrived. Until then every permission check would
+  // say "no", so a reload on e.g. /admin/patients flashed "Unauthorized".
+  const [roleDefaultsUid, setRoleDefaultsUid] = useState(null);
   const [authResolved, setAuthResolved] = useState(false);
   // The uid whose profile snapshot has actually arrived. A plain "resolved" boolean
   // isn't enough: right after login it can still be left over from the logged-out
@@ -62,13 +65,19 @@ export const AuthProvider = ({ children }) => {
     // Gated on `user` — the rules require sign-in, and subscribing while logged out
     // just produces a permission-denied round trip with nothing to show for it.
     if (!user) return undefined;
-    const unsubscribe = onSnapshot(collection(db, 'roleDefaults'), (snap) => {
-      const next = {};
-      snap.forEach((d) => {
-        next[d.id] = d.data();
-      });
-      setRoleDefaults(next);
-    });
+    const unsubscribe = onSnapshot(
+      collection(db, 'roleDefaults'),
+      (snap) => {
+        const next = {};
+        snap.forEach((d) => {
+          next[d.id] = d.data();
+        });
+        setRoleDefaults(next);
+        setRoleDefaultsUid(user.uid);
+      },
+      // Denied (e.g. a deactivated account) — stop waiting; checks fall back to "no".
+      () => setRoleDefaultsUid(user.uid)
+    );
     return unsubscribe;
   }, [user]);
 
@@ -99,7 +108,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const loading = !authResolved || (!!user && !profileResolved);
+  const loading = !authResolved || (!!user && (!profileResolved || (profile?.status === 'active' && roleDefaultsUid !== user.uid)));
 
   const value = {
     user,

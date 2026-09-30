@@ -112,7 +112,7 @@ const BookingModal = ({ isOpen, onClose }) => {
                       <label className="block text-sm font-medium text-text-dark mb-1">Full Name *</label>
                       <input 
                         type="text" 
-                        name="name"
+                        name="name" maxLength={200}
                         required
                         value={formData.name}
                         onChange={handleChange}
@@ -126,7 +126,7 @@ const BookingModal = ({ isOpen, onClose }) => {
                         <label className="block text-sm font-medium text-text-dark mb-1">Phone Number *</label>
                         <input 
                           type="tel" 
-                          name="phone"
+                          name="phone" maxLength={30}
                           required
                           value={formData.phone}
                           onChange={handleChange}
@@ -167,7 +167,7 @@ const BookingModal = ({ isOpen, onClose }) => {
                     <div>
                       <label className="block text-sm font-medium text-text-dark mb-1">Additional Message (Optional)</label>
                       <textarea 
-                        name="message"
+                        name="message" maxLength={2000}
                         value={formData.message}
                         onChange={handleChange}
                         rows="3"

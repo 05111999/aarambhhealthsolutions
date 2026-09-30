@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { doc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { Inbox, Phone, Mail, Calendar, Trash2, CheckCircle2 } from 'lucide-react';
 import { db } from '../../lib/firebase';
@@ -52,13 +52,25 @@ const InquiriesPage = () => {
     [itemData]
   );
 
+  const [actionError, setActionError] = useState('');
+
   const updateStatus = async (id, status) => {
-    await updateDoc(doc(db, tab.collection, id), { status, updatedBy: user.uid, updatedAt: serverTimestamp() });
+    setActionError('');
+    try {
+      await updateDoc(doc(db, tab.collection, id), { status, updatedBy: user.uid, updatedAt: serverTimestamp() });
+    } catch (err) {
+      setActionError(`Could not update the status: ${err.message}`);
+    }
   };
 
   const handleDelete = async (id) => {
     if (!window.confirm('Delete this submission? This cannot be undone.')) return;
-    await deleteDoc(doc(db, tab.collection, id));
+    setActionError('');
+    try {
+      await deleteDoc(doc(db, tab.collection, id));
+    } catch (err) {
+      setActionError(`Could not delete the submission: ${err.message}`);
+    }
   };
 
   const newCount = items.filter((i) => i.status === 'new').length;
@@ -74,6 +86,12 @@ const InquiriesPage = () => {
           <p className="text-text-muted text-sm">Booking requests, contact messages, and job applications from the public site.</p>
         </div>
       </div>
+
+      {actionError && (
+        <div className="mb-6 bg-red-50 border border-red-100 text-red-600 text-sm font-medium px-4 py-2.5 rounded-lg">
+          {actionError}
+        </div>
+      )}
 
       <div className="flex items-center gap-1 sm:gap-2 mb-6 border-b border-border overflow-x-auto">
         {TABS.map((t) => (

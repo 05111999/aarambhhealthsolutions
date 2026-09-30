@@ -1,12 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { doc, getDoc } from 'firebase/firestore';
-import { ArrowLeft, Plus, Trash2, Save, Search, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronRight, Plus, Trash2, Save, Search, X } from 'lucide-react';
 import { db } from '../../lib/firebase';
 import { useAuth } from '../auth/AuthContext';
 import { formatMoney } from '../billing/money';
 import { toDateInputValue } from '../../lib/dateInput';
-import { usePatientSearch } from '../patients/usePatientSearch';
+import { usePatientMatches } from '../patients/usePatientMatches';
 import { useBillSettings, useHospitals, useTherapists } from '../settings/useDirectory';
 import { useLiveSource } from '../data/liveStore';
 import { SOURCES } from '../data/sources';
@@ -97,15 +97,30 @@ const BillEditor = () => {
   const departments = useMemo(() => departmentData || [], [departmentData]);
   const [initialized, setInitialized] = useState(!isEdit);
   const [searchTerm, setSearchTerm] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [patientHighlight, setPatientHighlight] = useState(0);
+  // Once chosen, the patient shows as just a name; "Change" opens the printed details.
+  const [patientOpen, setPatientOpen] = useState(false);
+  const [pickingPatient, setPickingPatient] = useState(!isEdit);
+  // Hospital & Physician shows just the two names until expanded.
+  const [hpOpen, setHpOpen] = useState(false);
   const [pickDept, setPickDept] = useState('');
   const [pickService, setPickService] = useState('');
+  const [serviceQuery, setServiceQuery] = useState('');
+  const [serviceListOpen, setServiceListOpen] = useState(false);
+  const [serviceHighlight, setServiceHighlight] = useState(0);
+  const serviceInputRef = useRef(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const { results: searchResults, loading: searching } = usePatientSearch(searchTerm);
+  const { matches: patientMatches, loading: patientsLoading } = usePatientMatches(searchTerm);
   const activeHospitals = hospitals.filter((h) => h.isActive !== false);
   const activeTherapists = therapists.filter((t) => t.isActive !== false);
   const hospital = hospitals.find((h) => h.id === form.hospitalId) || null;
+  // Stays open while a hospital still has to be chosen or the patient's referring
+  // hospital isn't set up (its warning must be seen).
+  const referralMissing = !isEdit && !!patient?.referredFromHospital && !referringHospital(patient, hospitals);
+  const hpExpanded = hpOpen || !form.hospitalId || referralMissing;
 
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
 
@@ -113,6 +128,8 @@ const BillEditor = () => {
   const selectPatient = (p) => {
     setPatient(p);
     setSearchTerm('');
+    setPickingPatient(false);
+    setPatientOpen(false);
     setForm((f) => ({
       ...f,
       patient: { name: p.name || '', phone: p.contact1 || '', address: p.address || '', cityLine: '' },
@@ -192,20 +209,69 @@ const BillEditor = () => {
     setForm((f) => ({ ...f, hospitalId: id, notes: f.notes || h?.defaultNote || '' }));
   }
 
-  const roots = departments.filter((d) => d.parentId === null && d.isActive !== false);
-  const serviceOptions = useMemo(() => (pickDept ? getBillableOptions(departments, pickDept) : []), [departments, pickDept]);
+  const roots = useMemo(() => departments.filter((d) => d.parentId === null && d.isActive !== false), [departments]);
+  // Every priced service in the catalog, tagged with its top-level department, so a
+  // service can be found by typing without choosing the department first.
+  const allServices = useMemo(
+    () => roots.flatMap((root) => getBillableOptions(departments, root.id).map((o) => ({ ...o, deptId: root.id, deptName: root.name }))),
+    [departments, roots]
+  );
+  const serviceSuggestions = useMemo(() => {
+    const words = serviceQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return allServices.filter(
+      (o) => (!pickDept || o.deptId === pickDept) && words.every((w) => `${o.pathLabel} ${o.deptName}`.toLowerCase().includes(w))
+    );
+  }, [allServices, pickDept, serviceQuery]);
+  const deptHasServices = !pickDept || allServices.some((o) => o.deptId === pickDept);
+
+  // Picking a suggestion fills in its department too; "Add" (or Enter) adds the line.
+  const chooseService = (o) => {
+    setPickDept(o.deptId);
+    setPickService(o.id);
+    setServiceQuery(o.pathLabel);
+    setServiceListOpen(false);
+  };
 
   const addService = () => {
-    const dept = roots.find((d) => d.id === pickDept);
-    const option = serviceOptions.find((o) => o.id === pickService);
-    if (!dept || !option) return;
+    const option = allServices.find((o) => o.id === pickService);
+    if (!option) return;
     set({
       items: [
         ...form.items,
-        { key: newKey(), name: option.name, description: option.pathLabel !== option.name ? option.pathLabel : dept.name, price: String(option.price), departmentId: dept.id, departmentName: dept.name },
+        { key: newKey(), name: option.name, description: option.pathLabel !== option.name ? option.pathLabel : option.deptName, price: String(option.price), departmentId: option.deptId, departmentName: option.deptName },
       ],
     });
     setPickService('');
+    setServiceQuery('');
+    serviceInputRef.current?.focus();
+  };
+
+  const onServiceKeyDown = (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      setServiceListOpen(true);
+      const n = serviceSuggestions.length;
+      if (n) setServiceHighlight((i) => (e.key === 'ArrowDown' ? (i + 1) % n : (i - 1 + n) % n));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (serviceListOpen && serviceSuggestions[serviceHighlight]) chooseService(serviceSuggestions[serviceHighlight]);
+      else addService();
+    } else if (e.key === 'Escape') {
+      setServiceListOpen(false);
+    }
+  };
+
+  const onPatientKeyDown = (e) => {
+    const n = patientMatches.length;
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && n) {
+      e.preventDefault();
+      setPatientHighlight((i) => (e.key === 'ArrowDown' ? (i + 1) % n : (i - 1 + n) % n));
+    } else if (e.key === 'Enter' && patientMatches[patientHighlight]) {
+      e.preventDefault();
+      selectPatient(patientMatches[patientHighlight]);
+    } else if (e.key === 'Escape' && patient) {
+      setPickingPatient(false);
+    }
   };
   const addCustomItem = () => set({ items: [...form.items, { key: newKey(), name: '', description: '', price: '', departmentId: null, departmentName: null }] });
   const updateItem = (key, patch) => set({ items: form.items.map((i) => (i.key === key ? { ...i, ...patch } : i)) });
@@ -238,7 +304,10 @@ const BillEditor = () => {
   const handleSave = async () => {
     setError('');
     if (!patient) return setError('Select a patient.');
-    if (!hospital) return setError('Select a hospital.');
+    if (!hospital) {
+      setHpOpen(true);
+      return setError('Select a hospital.');
+    }
     if (form.items.length === 0) return setError('Add at least one item.');
     if (form.items.some((i) => !i.name.trim())) return setError('Every item needs a name.');
     if (form.items.some((i) => i.price === '' || Number.isNaN(Number(i.price)) || Number(i.price) < 0)) {
@@ -293,48 +362,102 @@ const BillEditor = () => {
         <div className="space-y-5 w-full">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
             <Card step={1} title="Patient">
-              {!patient && !isEdit ? (
+              {pickingPatient ? (
                 <div>
                   <div className="relative">
                     <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
                     <input
-                      className={`${inputClass} pl-9`}
-                      placeholder="Search by patient code, name, or phone…"
+                      className={`${inputClass} pl-9 ${patient ? 'pr-9' : ''}`}
+                      placeholder="Type a name, patient code or phone number…"
                       value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
+                      onChange={(e) => {
+                        setSearchTerm(e.target.value);
+                        setPatientHighlight(0);
+                      }}
+                      onFocus={() => setSearchFocused(true)}
+                      onBlur={() => setSearchFocused(false)}
+                      onKeyDown={onPatientKeyDown}
                       autoFocus
                     />
-                  </div>
-                  {searchTerm.trim() && (
-                    <div className="mt-2 border border-border rounded-lg divide-y divide-border max-h-60 overflow-auto">
-                      {searchResults.map((p) => (
-                        <button
-                          key={p.id}
-                          type="button"
-                          onClick={() => selectPatient(p)}
-                          className="w-full text-left px-3.5 py-2.5 cursor-pointer hover:bg-bg transition-colors"
-                        >
-                          <span className="block text-sm font-medium text-text-dark">{p.name}</span>
-                          <span className="block text-xs text-text-muted">{p.patientCode} · {p.contact1}</span>
-                        </button>
-                      ))}
-                      {searchResults.length === 0 && <p className="px-3.5 py-3 text-sm text-text-muted">{searching ? 'Searching…' : 'No matching patients.'}</p>}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between bg-bg rounded-lg px-3.5 py-2.5">
-                    <div>
-                      <p className="text-sm font-semibold text-text-dark mb-0">{patient?.name || form.patient.name}</p>
-                      <p className="text-xs text-text-muted mb-0 font-mono">{patient?.patientCode || existing?.patient?.patientCode}</p>
-                    </div>
-                    {!isEdit && (
-                      <button type="button" onClick={() => setPatient(null)} className="text-xs font-semibold text-primary cursor-pointer hover:text-teal">
-                        Change
+                    {patient && (
+                      <button
+                        type="button"
+                        onClick={() => setPickingPatient(false)}
+                        title="Keep the current patient"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-text-muted cursor-pointer hover:text-text-dark"
+                      >
+                        <X size={15} />
                       </button>
                     )}
                   </div>
+                  {(searchTerm.trim() || searchFocused) && (
+                    <div className="mt-2 border border-border rounded-lg divide-y divide-border max-h-72 overflow-auto">
+                      {!searchTerm.trim() && patientMatches.length > 0 && (
+                        <p className="px-3.5 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-text-muted mb-0">Recently added</p>
+                      )}
+                      {patientMatches.map((p, i) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          // mousedown (not click) so it registers before the input's blur hides the list
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            selectPatient(p);
+                          }}
+                          onMouseEnter={() => setPatientHighlight(i)}
+                          className={`w-full text-left px-3.5 py-2.5 cursor-pointer transition-colors ${i === patientHighlight ? 'bg-bg' : 'hover:bg-bg'}`}
+                        >
+                          <span className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-medium text-text-dark truncate">{p.name}</span>
+                            {p.currentStatus === 'discharged' && (
+                              <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-text-muted bg-bg border border-border rounded px-1.5 py-0.5">Discharged</span>
+                            )}
+                          </span>
+                          <span className="block text-xs text-text-muted truncate">
+                            {[p.patientCode, p.contact1, p.age ? `${p.age} yrs` : null].filter(Boolean).join(' · ')}
+                          </span>
+                        </button>
+                      ))}
+                      {patientMatches.length === 0 && searchTerm.trim() && (
+                        <p className="px-3.5 py-3 text-sm text-text-muted mb-0">{patientsLoading ? 'Loading patients…' : 'No matching patients.'}</p>
+                      )}
+                    </div>
+                  )}
+                  {!searchTerm.trim() && !searchFocused && (
+                    <p className="text-xs text-text-muted mt-2 mb-0">Any part of the name, code or phone works — use ↑ ↓ and Enter to pick.</p>
+                  )}
+                </div>
+              ) : !patientOpen ? (
+                <div className="flex items-center justify-between gap-3 bg-bg rounded-lg px-3.5 py-2.5">
+                  <p className="text-sm font-semibold text-text-dark mb-0 truncate">{form.patient.name || patient?.name}</p>
+                  <button type="button" onClick={() => setPatientOpen(true)} className="shrink-0 text-xs font-semibold text-primary cursor-pointer hover:text-teal">
+                    Change
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3 bg-bg rounded-lg px-3.5 py-2.5">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-text-dark mb-0 truncate">{patient?.name || form.patient.name}</p>
+                      <p className="text-xs text-text-muted mb-0 font-mono">{patient?.patientCode || existing?.patient?.patientCode}</p>
+                    </div>
+                    <button type="button" onClick={() => setPatientOpen(false)} className="shrink-0 text-xs font-semibold text-primary cursor-pointer hover:text-teal">
+                      Done
+                    </button>
+                  </div>
+                  {!isEdit && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchTerm('');
+                        setPickingPatient(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary cursor-pointer hover:text-teal"
+                    >
+                      <Search size={13} />
+                      Choose a different patient
+                    </button>
+                  )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className={labelClass}>Name on bill</label>
@@ -357,7 +480,38 @@ const BillEditor = () => {
               )}
             </Card>
 
-            <Card step={2} title="Hospital & Physician">
+            <Card
+              step={2}
+              title="Hospital & Physician"
+              action={
+                hpExpanded && form.hospitalId ? (
+                  <button
+                    type="button"
+                    onClick={() => setHpOpen(false)}
+                    title="Minimise"
+                    className="p-1 text-text-muted rounded-md cursor-pointer hover:text-text-dark hover:bg-bg transition-colors"
+                  >
+                    <ChevronDown size={18} />
+                  </button>
+                ) : null
+              }
+            >
+              {!hpExpanded ? (
+                <button
+                  type="button"
+                  onClick={() => setHpOpen(true)}
+                  title="Show hospital and physician details"
+                  className="w-full flex items-center justify-between gap-3 bg-bg rounded-lg px-3.5 py-2.5 text-left cursor-pointer hover:bg-border/40 transition-colors"
+                >
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold text-text-dark truncate">{hospital?.name || existing?.hospital?.name}</span>
+                    <span className="block text-xs text-text-muted truncate">
+                      {form.physicianId ? form.physician.name || 'Physician' : 'No physician'}
+                    </span>
+                  </span>
+                  <ChevronRight size={18} className="shrink-0 text-text-muted" />
+                </button>
+              ) : (
               <div className="space-y-3">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
                   <div>
@@ -420,6 +574,7 @@ const BillEditor = () => {
                   </div>
                 )}
               </div>
+              )}
             </Card>
           </div>
 
@@ -439,20 +594,65 @@ const BillEditor = () => {
                 value={pickDept}
                 onChange={(e) => {
                   setPickDept(e.target.value);
-                  setPickService('');
+                  // Keep a chosen service only if it belongs to the new department.
+                  const chosen = allServices.find((o) => o.id === pickService);
+                  if (chosen && e.target.value && chosen.deptId !== e.target.value) {
+                    setPickService('');
+                    setServiceQuery('');
+                  }
                 }}
               >
-                <option value="">Department…</option>
+                <option value="">All departments</option>
                 {roots.map((d) => (
                   <option key={d.id} value={d.id}>{d.name}</option>
                 ))}
               </select>
-              <select className={`${inputClass} bg-white cursor-pointer`} value={pickService} onChange={(e) => setPickService(e.target.value)} disabled={!pickDept}>
-                <option value="">{pickDept && serviceOptions.length === 0 ? 'No priced services' : 'Service…'}</option>
-                {serviceOptions.map((o) => (
-                  <option key={o.id} value={o.id}>{o.pathLabel} — {formatMoney(o.price)}</option>
-                ))}
-              </select>
+              <div className="relative min-w-0">
+                <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                <input
+                  ref={serviceInputRef}
+                  className={`${inputClass} pl-9`}
+                  placeholder={deptHasServices ? 'Type a service…' : 'No priced services in this department'}
+                  value={serviceQuery}
+                  onChange={(e) => {
+                    setServiceQuery(e.target.value);
+                    setPickService('');
+                    setServiceHighlight(0);
+                    setServiceListOpen(true);
+                  }}
+                  onFocus={() => setServiceListOpen(true)}
+                  onBlur={() => setServiceListOpen(false)}
+                  onKeyDown={onServiceKeyDown}
+                />
+                {serviceListOpen && !pickService && (
+                  <div className="absolute left-0 right-0 top-full mt-1 z-20 bg-white border border-border rounded-lg shadow-lg divide-y divide-border max-h-72 overflow-auto">
+                    {serviceSuggestions.map((o, i) => (
+                      <button
+                        key={o.id}
+                        type="button"
+                        // mousedown (not click) so it registers before the input's blur hides the list
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          chooseService(o);
+                        }}
+                        onMouseEnter={() => setServiceHighlight(i)}
+                        className={`w-full text-left px-3.5 py-2 cursor-pointer flex items-center justify-between gap-3 transition-colors ${i === serviceHighlight ? 'bg-bg' : 'hover:bg-bg'}`}
+                      >
+                        <span className="min-w-0">
+                          <span className="block text-sm text-text-dark truncate">{o.pathLabel}</span>
+                          {!pickDept && <span className="block text-xs text-text-muted truncate">{o.deptName}</span>}
+                        </span>
+                        <span className="shrink-0 text-sm font-medium text-text-dark">{formatMoney(o.price)}</span>
+                      </button>
+                    ))}
+                    {serviceSuggestions.length === 0 && (
+                      <p className="px-3.5 py-3 text-sm text-text-muted mb-0">
+                        {allServices.length === 0 ? 'No priced services yet.' : 'No matching services — use “Custom item” for anything else.'}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={addService}

@@ -13,6 +13,7 @@ const SessionLogPanel = ({ patientId, readOnly = false }) => {
 
   const [logs, setLogs] = useState([]);
   const [modalState, setModalState] = useState(null); // null | 'new' | logObject
+  const [deleteError, setDeleteError] = useState('');
 
   useEffect(() => {
     const unsubscribe = onSnapshot(
@@ -24,7 +25,12 @@ const SessionLogPanel = ({ patientId, readOnly = false }) => {
 
   const handleDelete = async (logId) => {
     if (!window.confirm('Delete this session log entry? This cannot be undone.')) return;
-    await deleteDoc(doc(db, 'patients', patientId, 'sessionLogs', logId));
+    setDeleteError('');
+    try {
+      await deleteDoc(doc(db, 'patients', patientId, 'sessionLogs', logId));
+    } catch (err) {
+      setDeleteError(`Could not delete the entry: ${err.message}`);
+    }
   };
 
   return (
@@ -44,6 +50,8 @@ const SessionLogPanel = ({ patientId, readOnly = false }) => {
           </button>
         )}
       </div>
+
+      {deleteError && <p className="text-sm text-red-600 mb-3">{deleteError}</p>}
 
       <div className="space-y-2">
         {logs.map((log) => (

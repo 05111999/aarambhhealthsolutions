@@ -32,6 +32,7 @@ const HospitalSettlementPage = () => {
   const setStatusFilter = (status) => setFilters({ status });
   const [searchTerm, setSearchTerm] = useState('');
   const [markingEntry, setMarkingEntry] = useState(null);
+  const [rateError, setRateError] = useState('');
 
   // Shared live source (the dashboard uses the same data); newest day first.
   const { data: settlementData, loaded: settlementsLoaded } = useLiveSource(SOURCES.settlements);
@@ -69,9 +70,14 @@ const HospitalSettlementPage = () => {
   const handleSaveRate = async (e) => {
     e.preventDefault();
     const amount = roundMoney(rateInput);
-    await setDoc(doc(db, 'settings', 'hospitalDailyRate'), { amount, updatedBy: user.uid, updatedAt: serverTimestamp() });
-    setDailyRate(amount);
-    setRateInput('');
+    setRateError('');
+    try {
+      await setDoc(doc(db, 'settings', 'hospitalDailyRate'), { amount, updatedBy: user.uid, updatedAt: serverTimestamp() });
+      setDailyRate(amount);
+      setRateInput('');
+    } catch (err) {
+      setRateError(`Could not update the rate: ${err.message}`);
+    }
   };
 
   const totals = useMemo(() => {
@@ -134,6 +140,7 @@ const HospitalSettlementPage = () => {
               Update Rate
             </button>
           </form>
+          {rateError && <p className="text-sm text-red-600 mt-2 mb-0">{rateError}</p>}
         </div>
       )}
 
