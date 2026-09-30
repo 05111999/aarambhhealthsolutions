@@ -1,5 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { collection, doc, deleteDoc, updateDoc, onSnapshot, query, orderBy, where, serverTimestamp } from 'firebase/firestore';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { doc, deleteDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { useLiveSources } from '../data/liveStore';
+import { SOURCES } from '../data/sources';
 import { UserPlus, X, Pencil, UserX, UserCheck, Mail, Trash2, CheckCircle2, ShieldCheck } from 'lucide-react';
 import { db } from '../../lib/firebase';
 import { useAuth } from '../auth/AuthContext';
@@ -9,10 +11,15 @@ import DeleteConfirmModal from '../patients/DeleteConfirmModal';
 import {
   createStaffAccount, restoreStaffAccount, updateStaffAccount, setStaffStatus, sendSetupEmail,
 } from './staffAccounts';
+import { useTherapists } from '../settings/useDirectory';
+import { syncTherapistEntry } from '../settings/therapistSync';
+import HelpLink from '../help/HelpLink';
 
 const ASSIGNABLE_ROLES = ['admin', 'receptionist', 'therapist'];
 const FILTER_DEFAULTS = { role: 'all', status: 'all', show: '' };
-const emptyForm = { name: '', email: '', role: 'receptionist', assignedDepartments: '', permissions: {} };
+const emptyForm = {
+  name: '', email: '', role: 'receptionist', phone: '', address: '', qualification: '', assignedDepartments: '', departmentIds: null, permissions: {},
+};
 
 const inputClass = 'w-full px-4 py-2 border border-border rounded-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none';
 
@@ -71,6 +78,9 @@ const splitDepartments = (text) => (text ? text.split(',').map((d) => d.trim()).
 
 // One modal for Add and Edit. On Add, an email that belongs to a previously deleted
 // account turns into a "Restore" confirmation instead of an error.
+const DEPARTMENT_SPECS = { departments: SOURCES.departments };
+const bySortOrder = (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
+
 const UserFormModal = ({ mode, initial, requestId, onClose, onDone }) => {
   const { user } = useAuth();
   const [form, setForm] = useState(initial);
@@ -78,7 +88,77 @@ const UserFormModal = ({ mode, initial, requestId, onClose, onDone }) => {
   const [error, setError] = useState('');
   const [restorable, setRestorable] = useState(null);
 
-  const payload = () => ({ ...form, assignedDepartments: splitDepartments(form.assignedDepartments) });
+  // Therapists pick from the real departments (several allowed). These are the same
+  // departments as in Settings › Therapists — the two are kept in step — and decide
+  // which bills the therapist can see.
+  const live = useLiveSources(DEPARTMENT_SPECS);
+  const allDepartments = useMemo(() => live.departments.data || [], [live.departments.data]);
+  const rootDepartments = useMemo(
+    () => allDepartments.filter((d) => d.parentId === null && d.isActive !== false).sort(bySortOrder),
+    [allDepartments]
+  );
+  const { therapists } = useTherapists();
+  const isTherapist = form.role === 'therapist';
+
+  // First time the lists are available: preselect from the account, else from their
+  // therapist entry, else by matching the department names typed in the past.
+  useEffect(() => {
+    if (form.departmentIds !== null || !live.departments.loaded) return;
+    const uid = initial.target?.id;
+    const entry = uid ? therapists.find((t) => t.id === uid) : null;
+    const typed = splitDepartments(form.assignedDepartments).map((n) => n.toLowerCase());
+    let ids = rootDepartments.filter((d) => typed.includes((d.name || '').toLowerCase())).map((d) => d.id);
+    if (entry?.departmentIds?.length) ids = entry.departmentIds;
+    if (initial.target?.assignedDepartmentIds?.length) ids = initial.target.assignedDepartmentIds;
+    setForm((f) => ({
+      ...f,
+      departmentIds: ids,
+      phone: f.phone || entry?.phone || '',
+      address: f.address || entry?.address || '',
+      qualification: f.qualification || entry?.qualification || '',
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live.departments.loaded, therapists, rootDepartments]);
+
+  const selectedIds = form.departmentIds || [];
+  const toggleDepartment = (id) =>
+    setForm((f) => {
+      const current = f.departmentIds || [];
+      return { ...f, departmentIds: current.includes(id) ? current.filter((d) => d !== id) : [...current, id] };
+    });
+  const selectedNames = () => allDepartments.filter((d) => selectedIds.includes(d.id)).sort(bySortOrder).map((d) => d.name);
+
+  const changeRole = (role) =>
+    setForm((f) => ({
+      ...f,
+      role,
+      // Leaving "Therapist" keeps the ticked departments as text for the other roles.
+      assignedDepartments: f.role === 'therapist' && role !== 'therapist' ? selectedNames().join(', ') : f.assignedDepartments,
+    }));
+
+  const payload = () =>
+    isTherapist
+      ? { ...form, assignedDepartments: selectedNames(), assignedDepartmentIds: selectedIds }
+      : { ...form, assignedDepartments: splitDepartments(form.assignedDepartments), assignedDepartmentIds: [] };
+
+  // After the account is saved, bring the therapist entry (bill visibility) in line.
+  const syncTherapist = async (uid) => {
+    if (!isTherapist || !uid) return '';
+    try {
+      await syncTherapistEntry({
+        uid,
+        name: form.name.trim(),
+        details: { phone: form.phone.trim(), address: form.address.trim(), qualification: form.qualification.trim() },
+        departmentIds: selectedIds,
+        departments: allDepartments,
+        therapists,
+        actorUid: user.uid,
+      });
+      return '';
+    } catch (err) {
+      return ` But their departments could not be copied to Settings › Therapists (${err.message || 'error'}) — please set them there.`;
+    }
+  };
 
   const markRequestDone = async () => {
     if (requestId) await updateDoc(doc(db, 'userRequests', requestId), { status: 'provisioned', provisionedAt: serverTimestamp() });
@@ -87,11 +167,17 @@ const UserFormModal = ({ mode, initial, requestId, onClose, onDone }) => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    const digits = (form.phone || '').replace(/\D/g, '');
+    if (digits.length < 10 || digits.length > 13) {
+      setError('Enter a valid phone number (10 digits, optionally with country code).');
+      return;
+    }
     setSaving(true);
     try {
       if (mode === 'edit') {
         await updateStaffAccount(initial.target, payload(), user.uid);
-        onDone(`Saved changes for ${form.name}.`);
+        const warning = await syncTherapist(initial.target.id);
+        onDone(`Saved changes for ${form.name}.${warning}`);
       } else {
         const result = await createStaffAccount(payload(), user.uid);
         if (result.restorable) {
@@ -99,7 +185,8 @@ const UserFormModal = ({ mode, initial, requestId, onClose, onDone }) => {
           return;
         }
         await markRequestDone();
-        onDone(`Account created for ${form.name}. A set-password email was sent to ${form.email.trim().toLowerCase()}.`);
+        const warning = await syncTherapist(result.uid);
+        onDone(`Account created for ${form.name}. A set-password email was sent to ${form.email.trim().toLowerCase()}.${warning}`);
       }
     } catch (err) {
       setError(err.message || 'Something went wrong.');
@@ -114,7 +201,8 @@ const UserFormModal = ({ mode, initial, requestId, onClose, onDone }) => {
     try {
       await restoreStaffAccount(restorable, payload(), user.uid);
       await markRequestDone();
-      onDone(`Restored ${form.name}'s account. A set-password email was sent to ${restorable.email}.`);
+      const warning = await syncTherapist(restorable.id);
+      onDone(`Restored ${form.name}'s account. A set-password email was sent to ${restorable.email}.${warning}`);
     } catch (err) {
       setError(err.message || 'Could not restore the account.');
     } finally {
@@ -175,7 +263,7 @@ const UserFormModal = ({ mode, initial, requestId, onClose, onDone }) => {
             </div>
             <div>
               <label className="block text-sm font-medium text-text-dark mb-1">Role *</label>
-              <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} className={`${inputClass} bg-white cursor-pointer`}>
+              <select value={form.role} onChange={(e) => changeRole(e.target.value)} className={`${inputClass} bg-white cursor-pointer`}>
                 {ASSIGNABLE_ROLES.map((r) => (
                   <option key={r} value={r}>
                     {ROLE_LABELS[r]}
@@ -183,18 +271,90 @@ const UserFormModal = ({ mode, initial, requestId, onClose, onDone }) => {
                 ))}
               </select>
             </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-text-dark mb-1">Phone *</label>
+                <input
+                  type="tel"
+                  name="phone"
+                  required
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  className={inputClass}
+                  placeholder="+91 98765 43210"
+                />
+              </div>
+              {isTherapist && (
+                <div>
+                  <label className="block text-sm font-medium text-text-dark mb-1">
+                    Qualification <span className="text-text-muted font-normal">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    name="qualification"
+                    value={form.qualification}
+                    onChange={(e) => setForm({ ...form, qualification: e.target.value })}
+                    className={inputClass}
+                    placeholder="e.g. BPT, MPT"
+                  />
+                </div>
+              )}
+            </div>
             <div>
               <label className="block text-sm font-medium text-text-dark mb-1">
-                Departments <span className="text-text-muted font-normal">(comma-separated)</span>
+                Address <span className="text-text-muted font-normal">(optional)</span>
               </label>
               <input
                 type="text"
-                value={form.assignedDepartments}
-                onChange={(e) => setForm({ ...form, assignedDepartments: e.target.value })}
+                name="address"
+                value={form.address}
+                onChange={(e) => setForm({ ...form, address: e.target.value })}
                 className={inputClass}
-                placeholder="Physiotherapy, Occupational Therapy"
               />
             </div>
+            {isTherapist ? (
+              <fieldset>
+                <legend className="block text-sm font-medium text-text-dark mb-1">
+                  Departments <span className="text-text-muted font-normal">(tick all that apply)</span>
+                </legend>
+                <p className="text-xs text-text-muted mb-2">They see bills containing services from these departments.</p>
+                {rootDepartments.length === 0 ? (
+                  <p className="text-sm text-text-muted mb-0">
+                    {live.departments.loaded ? 'No departments yet — add them under Departments.' : 'Loading departments…'}
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2" data-testid="therapist-departments">
+                    {rootDepartments.map((d) => {
+                      const on = selectedIds.includes(d.id);
+                      return (
+                        <label
+                          key={d.id}
+                          className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${
+                            on ? 'bg-primary/10 border-primary/40 text-primary font-semibold' : 'bg-white border-border text-text-dark hover:border-primary/30'
+                          }`}
+                        >
+                          <input type="checkbox" className="w-4 h-4 accent-primary" checked={on} onChange={() => toggleDepartment(d.id)} />
+                          {d.name}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </fieldset>
+            ) : (
+              <div>
+                <label className="block text-sm font-medium text-text-dark mb-1">
+                  Departments <span className="text-text-muted font-normal">(comma-separated)</span>
+                </label>
+                <input
+                  type="text"
+                  value={form.assignedDepartments}
+                  onChange={(e) => setForm({ ...form, assignedDepartments: e.target.value })}
+                  className={inputClass}
+                  placeholder="Physiotherapy, Occupational Therapy"
+                />
+              </div>
+            )}
             <div>
               <p className="block text-sm font-medium text-text-dark mb-1">Permission Overrides</p>
               <p className="text-xs text-text-muted mb-3">Optional. Leave unticked to use the role&apos;s default access.</p>
@@ -219,33 +379,27 @@ const UserManagement = () => {
   const { user, profile } = useAuth();
   const isSuperAdmin = profile?.role === 'superadmin';
 
-  const [users, setUsers] = useState([]);
-  const [requests, setRequests] = useState([]);
+  // Shared live sources (also used by the dashboard, notifications and Trash).
+  // Account requests are Super-Admin-only data.
+  const live = useLiveSources({ users: SOURCES.users, requests: isSuperAdmin ? SOURCES.userRequests : null });
+  const usersData = live.users.data;
+  const requestsData = live.requests.data;
+  // Newest first (unsaved new accounts, with no createdAt yet, at the top).
+  const users = useMemo(
+    () => [...(usersData || [])].sort((a, b) => (b.createdAt?.toMillis?.() ?? Number.MAX_SAFE_INTEGER) - (a.createdAt?.toMillis?.() ?? Number.MAX_SAFE_INTEGER)),
+    [usersData]
+  );
+  // Oldest request first.
+  const requests = useMemo(
+    () => [...(requestsData || [])].sort((a, b) => (a.requestedAt?.toMillis?.() ?? 0) - (b.requestedAt?.toMillis?.() ?? 0)),
+    [requestsData]
+  );
   const [modal, setModal] = useState(null); // { mode, initial, requestId? }
   const [deleting, setDeleting] = useState(null);
   const [notice, setNotice] = useState('');
   const [actionError, setActionError] = useState('');
   const [filters, setFilters] = useUrlFilters(FILTER_DEFAULTS);
   const requestsRef = useRef(null);
-
-  useEffect(() => {
-    const unsubscribe = onSnapshot(query(collection(db, 'users'), orderBy('createdAt', 'desc')), (snap) => {
-      setUsers(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
-    return unsubscribe;
-  }, []);
-
-  // Account requests are Super-Admin-only data.
-  useEffect(() => {
-    if (!isSuperAdmin) return undefined;
-    const unsubscribe = onSnapshot(query(collection(db, 'userRequests'), where('status', '==', 'pending')), (snap) => {
-      // Oldest first; sorted here rather than in the query to avoid a composite index.
-      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      list.sort((a, b) => (a.requestedAt?.toMillis?.() ?? 0) - (b.requestedAt?.toMillis?.() ?? 0));
-      setRequests(list);
-    });
-    return unsubscribe;
-  }, [isSuperAdmin]);
 
   useEffect(() => {
     if (filters.show === 'requests') requestsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -278,7 +432,11 @@ const UserManagement = () => {
           name: request.name || '',
           email: request.email || '',
           role: ASSIGNABLE_ROLES.includes(request.role) ? request.role : 'receptionist',
+          phone: request.phone || '',
+          address: request.address || '',
+          qualification: request.qualification || '',
           assignedDepartments: (request.assignedDepartments || []).join(', '),
+          departmentIds: null,
           permissions: request.permissions || {},
         }
         : emptyForm,
@@ -292,19 +450,24 @@ const UserManagement = () => {
         name: u.name || '',
         email: u.email || '',
         role: u.role,
+        phone: u.phone || '',
+        address: u.address || '',
+        qualification: u.qualification || '',
         assignedDepartments: (u.assignedDepartments || []).join(', '),
+        departmentIds: null,
         permissions: u.permissions || {},
       },
     });
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-6">
         <div>
           <h1 className="mb-1">User Management</h1>
           <p className="text-text-muted text-sm">
             {isSuperAdmin ? 'Add staff, change roles, and deactivate or remove accounts.' : 'Staff accounts (read-only).'}
           </p>
+          <HelpLink article={isSuperAdmin ? 'users-add' : 'users-view'} label={isSuperAdmin ? 'Adding staff and managing access' : undefined} />
         </div>
         {isSuperAdmin && (
           <button
@@ -395,12 +558,13 @@ const UserManagement = () => {
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-border overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white rounded-2xl border border-border overflow-x-auto">
+        <table className="w-full min-w-[880px] text-sm">
           <thead className="bg-bg text-text-muted text-xs uppercase tracking-wide">
             <tr>
               <th className="text-left px-6 py-3 font-semibold">Name</th>
               <th className="text-left px-6 py-3 font-semibold">Email</th>
+              <th className="text-left px-6 py-3 font-semibold">Phone</th>
               <th className="text-left px-6 py-3 font-semibold">Role</th>
               <th className="text-left px-6 py-3 font-semibold">Departments</th>
               <th className="text-left px-6 py-3 font-semibold">Status</th>
@@ -417,6 +581,7 @@ const UserManagement = () => {
                   </span>
                 </td>
                 <td className="px-6 py-3.5 text-text-muted">{u.email}</td>
+                <td className="px-6 py-3.5 text-text-muted whitespace-nowrap">{u.phone || '—'}</td>
                 <td className="px-6 py-3.5 text-text-muted">
                   {u.role === 'superadmin' ? (
                     <span className="inline-flex items-center gap-1 text-primary font-semibold">
@@ -462,7 +627,7 @@ const UserManagement = () => {
             ))}
             {visibleUsers.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-6 py-8 text-center text-text-muted">
+                <td colSpan={7} className="px-6 py-8 text-center text-text-muted">
                   No staff match these filters.
                 </td>
               </tr>

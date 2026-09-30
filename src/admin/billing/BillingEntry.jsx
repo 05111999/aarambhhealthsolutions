@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Search, UserPlus, ArrowRight } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Search, UserPlus, ArrowRight, BedDouble } from 'lucide-react';
 import { usePatientSearch } from '../patients/usePatientSearch';
 import { usePermission } from '../permissions/usePermission';
 import { useUrlFilters } from '../useUrlFilters';
@@ -8,6 +8,7 @@ import PatientOnboardingForm from '../patients/PatientOnboardingForm';
 import OutstandingDues from './OutstandingDues';
 import TransactionsList from './TransactionsList';
 import { useLedgerData } from './useLedgerData';
+import HelpLink from '../help/HelpLink';
 
 const TYPE_LABELS = { inpatient: 'Inpatient', outpatient: 'Outpatient', homeVisit: 'Home Visit', virtual: 'Virtual' };
 
@@ -17,13 +18,12 @@ const VIEWS = [
   { value: 'transactions', label: 'Transactions' },
 ];
 
-// Spec section 6's "Service/Billing Form" flow: select an existing patient, or onboard
-// a new one on the spot. Either way, you land on their profile to add the actual charge —
-// that page already shows their full ledger, so billing someone starts with the context
-// of what they already owe, and there's no encounter-lookup logic duplicated here.
+// Pick an existing patient (or onboard a new one on the spot), then go straight to the
+// bill generator with that patient pre-selected.
 const FindPatient = () => {
   const navigate = useNavigate();
   const canOnboard = usePermission('patients', 'create');
+  const canBill = usePermission('bills', 'create');
   const [searchTerm, setSearchTerm] = useState('');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const { results, loading } = usePatientSearch(searchTerm);
@@ -49,7 +49,7 @@ const FindPatient = () => {
           {results.map((p) => (
             <button
               key={p.id}
-              onClick={() => navigate(`/admin/patients/${p.id}`)}
+              onClick={() => navigate(canBill ? `/admin/bills/new?patient=${p.id}` : `/admin/patients/${p.id}`)}
               className="w-full flex items-center justify-between px-5 py-3.5 cursor-pointer hover:bg-bg transition-colors border-b border-border last:border-0 text-left"
             >
               <div>
@@ -80,7 +80,7 @@ const FindPatient = () => {
       <PatientOnboardingForm
         isOpen={showOnboarding}
         onClose={() => setShowOnboarding(false)}
-        onCreated={(patient) => navigate(`/admin/patients/${patient.id}`)}
+        onCreated={(patient) => navigate(canBill ? `/admin/bills/new?patient=${patient.id}` : `/admin/patients/${patient.id}`)}
       />
     </div>
   );
@@ -104,16 +104,28 @@ const BillingEntry = () => {
 
   return (
     <div>
-      <h1 className="mb-1">Billing</h1>
-      <p className="text-text-muted text-sm mb-6">Bill a patient, follow up on dues, or review every transaction.</p>
+      <div className="flex items-start justify-between flex-wrap gap-3 mb-6">
+        <div>
+          <h1 className="mb-1">Billing</h1>
+          <p className="text-text-muted text-sm mb-1">Bill a patient, follow up on dues, or review every transaction.</p>
+          <HelpLink article="payment-record" label="Recording payments, receipts and dues" />
+        </div>
+        <Link
+          to="/admin/billing/ipd"
+          className="inline-flex items-center gap-2 bg-white border border-border text-text-dark font-semibold px-4 py-2.5 rounded-lg hover:border-primary/30 hover:text-primary transition-colors text-sm"
+        >
+          <BedDouble size={16} />
+          IPD / Hospital Running Bill
+        </Link>
+      </div>
 
-      <div className="flex items-center gap-2 mb-6 border-b border-border">
+      <div className="flex items-center gap-1 sm:gap-2 mb-6 border-b border-border overflow-x-auto">
         {VIEWS.map((v) => (
           <button
             key={v.value}
             // Switching tabs drops the other tab's filters instead of carrying them over.
             onClick={() => setFilters({ view: v.value }, { reset: true })}
-            className={`px-4 py-3 text-sm font-semibold border-b-2 -mb-px cursor-pointer transition-colors ${
+            className={`shrink-0 whitespace-nowrap px-3 sm:px-4 py-3 text-sm font-semibold border-b-2 cursor-pointer transition-colors ${
               activeView === v.value ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:text-text-dark'
             }`}
           >

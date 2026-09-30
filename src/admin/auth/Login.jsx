@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { LogIn, ShieldCheck } from 'lucide-react';
 import { useAuth } from './AuthContext';
+import InstallAppButton from '../layout/InstallAppButton';
 
 const Login = () => {
   const { login, resetPassword, accessError, isAuthenticated, loading: authLoading } = useAuth();
@@ -107,6 +108,9 @@ const Login = () => {
             {!submitting && <LogIn size={18} />}
           </button>
         </form>
+        <div className="mt-5 flex justify-center">
+          <InstallAppButton variant="link" />
+        </div>
       </div>
     </div>
   );

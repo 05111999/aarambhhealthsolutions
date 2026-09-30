@@ -5,6 +5,8 @@ import { X, Save } from 'lucide-react';
 import { db } from '../../lib/firebase';
 import { useAuth } from '../auth/AuthContext';
 import PatientFormFields from './PatientFormFields';
+import { useTherapists } from '../settings/useDirectory';
+import { recomputeVisibilityForPatient } from '../bills/billService';
 
 // Edit is deliberately scoped to demographic fields only — patientCode, currentStatus,
 // currentPatientType, advanceAmount, createdBy/createdAt never go through this form.
@@ -23,10 +25,15 @@ const toFormState = (patient) => ({
   sessionFrequency: patient.sessionFrequency || '',
   referredFromHospital: !!patient.referredFromHospital,
   referringHospitalName: patient.referringHospitalName || '',
+  referringHospitalId: patient.referringHospitalId || null,
+  assignedTherapistIds: patient.assignedTherapistIds || [],
 });
+
+const sameIds = (a = [], b = []) => a.length === b.length && a.every((x) => b.includes(x));
 
 const EditPatientModal = ({ isOpen, onClose, patientId, patient }) => {
   const { user } = useAuth();
+  const { therapists } = useTherapists();
   const [form, setForm] = useState(() => toFormState(patient));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -59,9 +66,15 @@ const EditPatientModal = ({ isOpen, onClose, patientId, patient }) => {
         sessionFrequency: form.sessionFrequency || '',
         referredFromHospital: !!form.referredFromHospital,
         referringHospitalName: form.referredFromHospital ? form.referringHospitalName || '' : '',
+        referringHospitalId: form.referredFromHospital ? form.referringHospitalId || null : null,
+        assignedTherapistIds: form.assignedTherapistIds || [],
         updatedBy: user.uid,
         updatedAt: serverTimestamp(),
       });
+      // Assigned therapists can see this patient's bills, so existing bills follow the change.
+      if (!sameIds(patient.assignedTherapistIds, form.assignedTherapistIds)) {
+        await recomputeVisibilityForPatient(patientId, form.assignedTherapistIds || [], therapists);
+      }
       onClose();
     } catch (err) {
       setError(err.message || 'Failed to update patient.');

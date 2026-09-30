@@ -14,6 +14,7 @@ import {
 import { StatLink, Section, CardGrid, LinkListBox, LinkListRow } from './DashboardUI';
 import ActivityFeed from './ActivityFeed';
 import { buildActivity } from './activity';
+import HelpLink from '../help/HelpLink';
 
 // Which sections each role sees, in the order that role cares about them. A section
 // still only renders if the viewer also holds the matching permission — so a card can
@@ -393,6 +394,10 @@ const AdminDashboard = () => {
             {' · '}
             {new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}
           </p>
+          <HelpLink
+            article={role === 'therapist' ? 'therapist-getting-started' : 'dashboard-overview'}
+            label={role === 'therapist' ? 'How does the therapist dashboard work?' : 'How the dashboard works'}
+          />
         </div>
         {sections.length > 0 && (
           <div className="flex items-center gap-3">

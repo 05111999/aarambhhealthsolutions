@@ -6,6 +6,7 @@ import ScrollToTop from './components/layout/ScrollToTop';
 import WhatsAppButton from './components/common/WhatsAppButton';
 import SocialRail from './components/common/SocialRail';
 import BackToTopButton from './components/common/BackToTopButton';
+import BackToDashboardButton from './components/common/BackToDashboardButton';
 import ErrorBoundary from './components/common/ErrorBoundary';
 
 // Pages that don't touch Firestore/Storage stay eager — instant load for the
@@ -69,6 +70,7 @@ function PublicSite() {
       <WhatsAppButton />
       <SocialRail />
       <BackToTopButton />
+      <BackToDashboardButton />
       {hasOpenedBookingModal && (
         <Suspense fallback={null}>
           <BookingModal isOpen={isBookingModalOpen} onClose={closeBookingModal} />

@@ -1,7 +1,9 @@
-import React, { useEffect, useState } from 'react';
-import { collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import React, { useState } from 'react';
+import { collection, doc, addDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { Plus, Building2, Pencil } from 'lucide-react';
 import { db } from '../../lib/firebase';
+import { useLiveSource } from '../data/liveStore';
+import { SOURCES } from '../data/sources';
 import { useAuth } from '../auth/AuthContext';
 import { usePermission } from '../permissions/usePermission';
 import { useUrlFilters } from '../useUrlFilters';
@@ -17,17 +19,12 @@ const chipClass = (selected) =>
 const DepartmentTree = () => {
   const { user } = useAuth();
   const canManage = usePermission('departments', 'manage');
-  const [nodes, setNodes] = useState([]);
+  // Shared live source (also used by the dashboard, notifications and bill editor).
+  const { data: nodeData } = useLiveSource(SOURCES.departments);
+  const nodes = nodeData || [];
   const [modal, setModal] = useState(null); // { parent } | { node } | null
   const [{ filter }, setFilters] = useUrlFilters({ filter: '' });
   const activeFilter = DEPARTMENT_FILTERS.some((f) => f.value === filter) ? filter : '';
-
-  useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'departments'), (snap) => {
-      setNodes(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
-    return unsubscribe;
-  }, []);
 
   const roots = nodes.filter((n) => n.parentId === null).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
 
@@ -66,7 +63,7 @@ const DepartmentTree = () => {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-6">
         <div>
           <h1 className="mb-1">Departments &amp; Services</h1>
           <p className="text-text-muted text-sm">The full service catalog — unlimited nesting, fully editable.</p>

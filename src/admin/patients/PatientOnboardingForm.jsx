@@ -5,6 +5,8 @@ import { useAuth } from '../auth/AuthContext';
 import { db } from '../../lib/firebase';
 import { createPatient } from './patientCode';
 import PatientFormFields, { inputClasses } from './PatientFormFields';
+import { useBillSettings, useHospitals } from '../settings/useDirectory';
+import { defaultHospitalFor } from '../bills/billingHospital';
 
 const emptyForm = {
   name: '',
@@ -14,24 +16,40 @@ const emptyForm = {
   contact1: '',
   contact2: '',
   primaryDiagnosis: '',
-  patientType: 'outpatient',
+  source: '', // 'hospital:<id>' | 'outpatient' | 'homeVisit' | 'virtual'
   advanceAmount: '',
   attenderName: '',
   attenderContact: '',
   sessionFrequency: '',
-  referredFromHospital: false,
-  referringHospitalName: '',
+  assignedTherapistIds: [],
 };
 
-const PATIENT_TYPES = [
-  { value: 'inpatient', label: 'Inpatient' },
-  { value: 'outpatient', label: 'Outpatient' },
+// Direct patients; a patient received from a hospital is an Inpatient of that hospital.
+const DIRECT_TYPES = [
+  { value: 'outpatient', label: 'Out Patient' },
   { value: 'homeVisit', label: 'Home Visit' },
   { value: 'virtual', label: 'Virtual' },
 ];
 
+// One "Received from" choice sets both the patient type and the referring hospital, so
+// billing can pick the right hospital without asking again.
+function withSource(form, hospitals) {
+  const hospitalId = form.source.startsWith('hospital:') ? form.source.slice('hospital:'.length) : null;
+  const hospital = hospitalId ? hospitals.find((h) => h.id === hospitalId) : null;
+  return {
+    ...form,
+    patientType: hospital ? 'inpatient' : form.source,
+    referredFromHospital: !!hospital,
+    referringHospitalId: hospital ? hospital.id : null,
+    referringHospitalName: hospital ? hospital.name : '',
+  };
+}
+
 const PatientOnboardingForm = ({ isOpen, onClose, onCreated }) => {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
+  const { hospitals } = useHospitals();
+  const { ownHospitalId } = useBillSettings();
+  const activeHospitals = hospitals.filter((h) => h.isActive !== false);
   const [form, setForm] = useState(emptyForm);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -51,9 +69,17 @@ const PatientOnboardingForm = ({ isOpen, onClose, onCreated }) => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    if (!form.source) {
+      setError('Choose where the patient was received from.');
+      return;
+    }
     setSubmitting(true);
     try {
-      const patient = await createPatient(db, form, user.uid);
+      const data = withSource(form, hospitals);
+      // Any advance gets a receipt, branded like this patient's bills.
+      data.receiptHospital = defaultHospitalFor(data, hospitals, ownHospitalId);
+      data.receivedByName = profile?.name || '';
+      const patient = await createPatient(db, data, user.uid);
       onCreated?.(patient);
       setForm(emptyForm);
       onClose();
@@ -90,18 +116,27 @@ const PatientOnboardingForm = ({ isOpen, onClose, onCreated }) => {
               </div>
 
               <form onSubmit={handleSubmit} className="p-6 space-y-4">
-                <PatientFormFields form={form} onFieldChange={handleFieldChange} />
+                <PatientFormFields form={form} onFieldChange={handleFieldChange} hideReferral />
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-text-dark mb-1">Patient Type *</label>
-                    <select name="patientType" required value={form.patientType} onChange={handleChange} className={`${inputClasses} bg-white`}>
-                      {PATIENT_TYPES.map((t) => (
-                        <option key={t.value} value={t.value}>
-                          {t.label}
-                        </option>
-                      ))}
+                    <label className="block text-sm font-medium text-text-dark mb-1">Received from / Patient type *</label>
+                    <select name="source" required value={form.source} onChange={handleChange} className={`${inputClasses} bg-white`}>
+                      <option value="">Select…</option>
+                      <optgroup label="Referred by hospital (Inpatient)">
+                        {activeHospitals.map((h) => (
+                          <option key={h.id} value={`hospital:${h.id}`}>{h.name}</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Direct">
+                        {DIRECT_TYPES.map((t) => (
+                          <option key={t.value} value={t.value}>{t.label}</option>
+                        ))}
+                      </optgroup>
                     </select>
+                    {activeHospitals.length === 0 && (
+                      <p className="text-xs text-text-muted mt-1 mb-0">No partner hospitals yet — the Super Admin adds them in Settings › Hospitals.</p>
+                    )}
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-text-dark mb-1">Advance Payment (₹)</label>

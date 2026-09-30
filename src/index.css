@@ -48,3 +48,68 @@
     text-wrap: balance;
   }
 }
+
+/* Medical invoice printing: only the invoice copy mounted under <body> is printed, on
+   A4 portrait with no browser margins, keeping its colours, borders and watermark.
+   Scoped to pages that actually show an invoice (body.has-print-invoice) and to a named
+   page, so printing anything else in the app or the public site is unaffected. */
+@page invoice {
+  size: A4 portrait;
+  margin: 0;
+}
+
+/* Multi-page documents (IPD running bill): page margins so continued pages don't start
+   at the paper edge; rows never split across pages and table headings repeat. */
+@page statement {
+  size: A4 portrait;
+  margin: 10mm 0 12mm;
+}
+
+/* Medical invoice (detailed bill): slimmer margins so a typical bill fits one page;
+   a long bill still flows onto the next page with a margin. */
+@page billpage {
+  size: A4 portrait;
+  margin: 6mm 0 8mm;
+}
+
+@media screen {
+  .print-only {
+    display: none;
+  }
+}
+
+@media print {
+  body.has-print-invoice {
+    background: #fff !important;
+    margin: 0 !important;
+  }
+  body.has-print-invoice #root {
+    display: none !important;
+  }
+  body.has-print-invoice .print-only {
+    display: block !important;
+    page: invoice;
+  }
+  body.has-print-invoice .print-only.print-multipage {
+    page: statement;
+  }
+  body.has-print-invoice .print-only.print-multipage.print-bill {
+    page: billpage;
+  }
+  .print-multipage tr {
+    break-inside: avoid;
+  }
+  .print-multipage thead {
+    display: table-header-group;
+  }
+  .print-only,
+  .print-only * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
+
+/* Admin pages on phones: the site-wide 48px h1 is too wide for page titles. */
+@media (max-width: 639px) {
+  .admin-main h1 { font-size: 30px; overflow-wrap: anywhere; }
+}

@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { collection, doc, setDoc, onSnapshot, query, orderBy, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { RefreshCw, HandCoins, Search } from 'lucide-react';
 import { db } from '../../lib/firebase';
+import { useLiveSource } from '../data/liveStore';
+import { SOURCES } from '../data/sources';
 import { useAuth } from '../auth/AuthContext';
 import { usePermission } from '../permissions/usePermission';
 import { useUrlFilters } from '../useUrlFilters';
@@ -31,30 +33,33 @@ const HospitalSettlementPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [markingEntry, setMarkingEntry] = useState(null);
 
+  // Shared live source (the dashboard uses the same data); newest day first.
+  const { data: settlementData, loaded: settlementsLoaded } = useLiveSource(SOURCES.settlements);
+  const allEntries = useMemo(
+    () => [...(settlementData || [])].sort((a, b) => (b.date?.toMillis?.() ?? 0) - (a.date?.toMillis?.() ?? 0)),
+    [settlementData]
+  );
+  const { ids: trashedIds } = useTrashedPatients();
+
   const refresh = async () => {
     setRefreshing(true);
     try {
-      await runAccrual(db, user.uid);
-      setDailyRate(await getDailyRate(db));
+      const rate = await getDailyRate(db);
+      setDailyRate(rate);
+      await runAccrual(db, user.uid, { dailyRate: rate, existingIds: new Set(allEntries.map((e) => e.id)) });
     } finally {
       setRefreshing(false);
     }
   };
 
+  // Accrue once the existing entries are known, so already-recorded days aren't re-read.
+  const [accrued, setAccrued] = useState(false);
   useEffect(() => {
+    if (!settlementsLoaded || accrued) return;
+    setAccrued(true);
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const [allEntries, setAllEntries] = useState([]);
-  const { ids: trashedIds } = useTrashedPatients();
-
-  useEffect(() => {
-    const unsubscribe = onSnapshot(query(collection(db, 'hospitalSettlements'), orderBy('date', 'desc')), (snap) => {
-      setAllEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
-    return unsubscribe;
-  }, []);
+  }, [settlementsLoaded, accrued]);
 
   // Entries for patients in the Trash stay stored but are left out of the page and totals.
   useEffect(() => {
@@ -105,7 +110,7 @@ const HospitalSettlementPage = () => {
       </div>
 
       {isSuperAdmin && (
-        <div className="bg-white rounded-2xl border border-border p-6 mb-6">
+        <div className="bg-white rounded-2xl border border-border p-4 sm:p-6 mb-6">
           <div className="flex items-center gap-3 mb-3">
             <div className="bg-primary/10 p-2.5 rounded-full">
               <HandCoins className="text-primary" size={18} />
@@ -115,7 +120,7 @@ const HospitalSettlementPage = () => {
               <p className="text-xs text-text-muted">Current: {formatMoney(dailyRate)} per admitted inpatient-day</p>
             </div>
           </div>
-          <form onSubmit={handleSaveRate} className="flex items-center gap-3">
+          <form onSubmit={handleSaveRate} className="flex flex-wrap items-center gap-3">
             <input
               type="number"
               min="0"
@@ -123,7 +128,7 @@ const HospitalSettlementPage = () => {
               value={rateInput}
               onChange={(e) => setRateInput(e.target.value)}
               placeholder="New rate (₹)"
-              className="px-4 py-2 border border-border rounded-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none w-48"
+              className="px-4 py-2 border border-border rounded-md focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none w-full sm:w-48"
             />
             <button type="submit" className="bg-primary text-white font-semibold px-4 py-2 rounded-lg hover:bg-light-blue transition-colors text-sm">
               Update Rate
@@ -156,8 +161,8 @@ const HospitalSettlementPage = () => {
         ))}
       </div>
 
-      <div className="bg-white rounded-2xl border border-border overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white rounded-2xl border border-border overflow-x-auto">
+        <table className="w-full min-w-[720px] text-sm">
           <thead className="bg-bg text-text-muted text-xs uppercase tracking-wide">
             <tr>
               <th className="text-left px-6 py-3 font-semibold">Patient</th>

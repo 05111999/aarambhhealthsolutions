@@ -82,7 +82,13 @@ export function billingStats(transactions) {
         totalDiscounts += roundMoney(t.discountAmount);
         discountCount += 1;
       }
-      byService.set(t.serviceName, roundMoney((byService.get(t.serviceName) || 0) + net));
+      // A bill carries its individual services; count each one (at its listed price)
+      // rather than the bill as a single "service".
+      if (t.items?.length) {
+        for (const item of t.items) byService.set(item.name, roundMoney((byService.get(item.name) || 0) + roundMoney(item.price)));
+      } else {
+        byService.set(t.serviceName, roundMoney((byService.get(t.serviceName) || 0) + net));
+      }
     }
   }
 

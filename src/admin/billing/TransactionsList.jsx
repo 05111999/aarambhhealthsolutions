@@ -53,7 +53,8 @@ const TransactionsList = ({ transactions, patients }) => {
   const isFiltered = filters.type !== 'all' || filters.range !== 'all' || !!filters.service;
 
   const services = useMemo(
-    () => [...new Set(transactions.filter((t) => t.type === 'charge').map((t) => t.serviceName))].sort(),
+    () =>
+      [...new Set(transactions.filter((t) => t.type === 'charge').flatMap((t) => (t.items?.length ? t.items.map((i) => i.name) : [t.serviceName])))].sort(),
     [transactions]
   );
 
@@ -62,7 +63,7 @@ const TransactionsList = ({ transactions, patients }) => {
       transactions
         .filter((t) => matchesType(t, filters.type))
         .filter((t) => matchesRange(t, filters.range))
-        .filter((t) => !filters.service || t.serviceName === filters.service)
+        .filter((t) => !filters.service || t.serviceName === filters.service || t.items?.some((i) => i.name === filters.service))
         .sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0)),
     [transactions, filters.type, filters.range, filters.service]
   );

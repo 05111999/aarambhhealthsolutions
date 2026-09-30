@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { collection, onSnapshot } from 'firebase/firestore';
 import { Trash2, RotateCcw, Search, CheckCircle2, X, ChevronRight, Users, Receipt, UserCog } from 'lucide-react';
-import { db } from '../../lib/firebase';
+import { useLiveSources } from '../data/liveStore';
+import { SOURCES } from '../data/sources';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../useUrlFilters';
 import { ROLE_LABELS } from '../permissions/permissionCatalog';
@@ -11,6 +11,10 @@ import {
   useTrashedPatients, useTrashedBills, useTrashedStaff, restoreFromTrash, restoreBillFromTrash,
 } from '../patients/trash';
 import { setStaffStatus } from '../users/staffAccounts';
+import DeleteConfirmModal from '../patients/DeleteConfirmModal';
+import {
+  deletePatientPermanently, deleteStaffPermanently, deleteTransactionPermanently, friendlyPermanentDeleteError, patientDeletionPlan,
+} from './permanentDelete';
 
 const TYPE_LABELS = { inpatient: 'Inpatient', outpatient: 'Outpatient', homeVisit: 'Home Visit', virtual: 'Virtual' };
 const METHOD_LABELS = { cash: 'Cash', card: 'Card', upi: 'UPI', bankTransfer: 'Bank Transfer', cheque: 'Cheque', advance: 'Advance', other: 'Other' };
@@ -30,6 +34,49 @@ const RestoreButton = ({ busy, disabled, title, onClick }) => (
   </button>
 );
 
+const DeleteButton = ({ disabled, title, onClick }) => (
+  <button
+    onClick={onClick}
+    disabled={disabled}
+    title={title || 'Delete permanently'}
+    className="inline-flex items-center gap-1.5 bg-white border border-red-200 text-red-600 text-sm font-semibold px-3.5 py-2 rounded-lg cursor-pointer hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
+  >
+    <Trash2 size={15} />
+    Delete
+  </button>
+);
+
+// Counts what permanently deleting a patient will remove (targeted reads, when the
+// dialog opens).
+const PatientDeleteImpact = ({ patient }) => {
+  const [counts, setCounts] = useState(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let live = true;
+    patientDeletionPlan(patient.id).then((plan) => live && setCounts(plan.counts)).catch(() => live && setFailed(true));
+    return () => {
+      live = false;
+    };
+  }, [patient.id]);
+  const n = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+  return (
+    <div className="text-sm bg-red-50/60 border border-red-100 rounded-lg px-4 py-3">
+      <p className="mb-1.5 font-medium text-text-dark">This also permanently deletes:</p>
+      {counts ? (
+        <ul className="list-disc pl-5 space-y-0.5 text-text-muted mb-0">
+          <li>{n(counts.visits, 'visit')} / admission{counts.visits === 1 ? '' : 's'}</li>
+          <li>{n(counts.charges, 'charge')} and {n(counts.payments, 'payment')} (with their receipts)</li>
+          <li>{n(counts.bills, 'bill')}</li>
+          <li>{n(counts.sessionLogs, 'session log')}</li>
+          {counts.settlements > 0 && <li>{n(counts.settlements, 'hospital settlement entry')}</li>}
+        </ul>
+      ) : (
+        <p className="text-text-muted mb-0">{failed ? 'Their visits, bills, payments, session logs and settlement entries.' : 'Counting their records…'}</p>
+      )}
+    </div>
+  );
+};
+
 const EmptyRow = ({ cols, text }) => (
   <tr>
     <td colSpan={cols} className="px-6 py-14 text-center text-text-muted">
@@ -41,8 +88,10 @@ const EmptyRow = ({ cols, text }) => (
 
 const Th = ({ children, right }) => <th className={`${right ? 'text-right' : 'text-left'} px-6 py-3 font-semibold`}>{children}</th>;
 
-// Super Admin's bin for deleted patients, bills and staff accounts. Nothing here has
-// been erased — Restore puts each item back exactly as it was.
+// Super Admin's bin for deleted patients, bills and staff accounts. Restore puts an item
+// back exactly as it was; Delete removes it permanently (type-to-confirm, audit-logged).
+const NAME_SPECS = { users: SOURCES.users, patients: SOURCES.patients };
+
 const TrashPage = () => {
   const { user } = useAuth();
   const [{ tab }, setFilters] = useUrlFilters({ tab: 'patients' });
@@ -50,22 +99,16 @@ const TrashPage = () => {
   const { bills, loaded: billsLoaded } = useTrashedBills();
   const { staff, loaded: staffLoaded } = useTrashedStaff();
 
-  const [staffNames, setStaffNames] = useState(new Map());
-  const [patientInfo, setPatientInfo] = useState(new Map());
   const [search, setSearch] = useState('');
   const [busyId, setBusyId] = useState(null);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [deleting, setDeleting] = useState(null); // { kind: 'patient' | 'bill' | 'staff', item }
 
-  useEffect(
-    () => onSnapshot(collection(db, 'users'), (snap) => setStaffNames(new Map(snap.docs.map((d) => [d.id, d.data().name])))),
-    []
-  );
-  // Bills need their patient's name/code, whether or not that patient is trashed too.
-  useEffect(
-    () => onSnapshot(collection(db, 'patients'), (snap) => setPatientInfo(new Map(snap.docs.map((d) => [d.id, d.data()])))),
-    []
-  );
+  // Names for trashed bills/staff come from the shared users and patients data.
+  const names = useLiveSources(NAME_SPECS);
+  const staffNames = useMemo(() => new Map((names.users.data || []).map((u) => [u.id, u.name])), [names.users.data]);
+  const patientInfo = useMemo(() => new Map((names.patients.data || []).map((p) => [p.id, p])), [names.patients.data]);
 
   const term = search.trim().toLowerCase();
   const matches = (...fields) => !term || fields.some((f) => f && String(f).toLowerCase().includes(term));
@@ -106,6 +149,52 @@ const TrashPage = () => {
     }
   };
 
+  const openDelete = (kind, item) => {
+    setError('');
+    setNotice('');
+    setDeleting({ kind, item });
+  };
+  const confirmDelete = async () => {
+    const { kind, item } = deleting;
+    try {
+      if (kind === 'patient') await deletePatientPermanently(item, user.uid);
+      if (kind === 'bill') await deleteTransactionPermanently(item, user.uid);
+      if (kind === 'staff') await deleteStaffPermanently(item, user.uid);
+    } catch (err) {
+      throw new Error(friendlyPermanentDeleteError(err));
+    }
+    setNotice(
+      kind === 'patient'
+        ? `${item.name} and all their records were permanently deleted.`
+        : kind === 'bill'
+          ? 'The entry was permanently deleted.'
+          : `${item.name}'s staff account was permanently deleted.`
+    );
+  };
+  const amountOf = (b) => formatMoney(b.type === 'payment' ? b.amount : b.netAmount);
+  const deleteDialog = !deleting
+    ? null
+    : deleting.kind === 'patient'
+      ? {
+          title: 'Delete Patient Permanently',
+          description: `${deleting.item.name} (${deleting.item.patientCode || 'no code'}) will be erased for good. This cannot be undone and they cannot be restored.`,
+          phraseLabel: 'the patient’s name',
+          phrase: deleting.item.name || '',
+        }
+      : deleting.kind === 'bill'
+        ? {
+            title: 'Delete Entry Permanently',
+            description: `This ${deleting.item.type === 'payment' ? 'payment' : 'charge'}${deleting.item.billNumber ? ` (bill ${deleting.item.billNumber})` : ''} of ${amountOf(deleting.item)} will be erased for good${deleting.item.billId ? ', together with its bill' : ''}. This cannot be undone.`,
+            phraseLabel: 'the amount',
+            phrase: amountOf(deleting.item),
+          }
+        : {
+            title: 'Delete Staff Account Permanently',
+            description: `${deleting.item.name}'s staff account will be erased for good and cannot be restored. Records they created (bills, payments, sessions) are kept. Their email (${deleting.item.email}) can't be used for a new staff account afterwards — restore instead if they may return.`,
+            phraseLabel: 'their email',
+            phrase: deleting.item.email || '',
+          };
+
   const TABS = [
     { key: 'patients', label: 'Patients', icon: Users, count: patients.length },
     { key: 'bills', label: 'Bills', icon: Receipt, count: bills.length },
@@ -118,7 +207,7 @@ const TrashPage = () => {
       <div className="mb-6">
         <h1 className="mb-1">Trash</h1>
         <p className="text-text-muted text-sm">
-          Deleted patients, bills and staff accounts are kept here — nothing is erased. Restore puts any item back exactly as it was.
+          Deleted patients, bills and staff accounts are kept here. Restore puts an item back exactly as it was; Delete removes it permanently.
         </p>
       </div>
 
@@ -135,12 +224,12 @@ const TrashPage = () => {
       )}
       {error && <div className="mb-4 bg-red-50 border border-red-100 text-red-600 text-sm px-4 py-3 rounded-lg">{error}</div>}
 
-      <div className="flex items-center gap-2 mb-4 border-b border-border">
+      <div className="flex items-center gap-1 sm:gap-2 mb-4 border-b border-border overflow-x-auto">
         {TABS.map((t) => (
           <button
             key={t.key}
             onClick={() => setFilters({ tab: t.key })}
-            className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-semibold border-b-2 -mb-px cursor-pointer transition-colors ${
+            className={`inline-flex items-center gap-2 shrink-0 whitespace-nowrap px-3 sm:px-4 py-3 text-sm font-semibold border-b-2 cursor-pointer transition-colors ${
               activeTab === t.key ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:text-text-dark'
             }`}
           >
@@ -164,8 +253,8 @@ const TrashPage = () => {
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-border overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white rounded-2xl border border-border overflow-x-auto">
+        <table className="w-full min-w-[800px] text-sm">
           {activeTab === 'patients' && (
             <>
               <thead className="bg-bg text-text-muted text-xs uppercase tracking-wide">
@@ -192,10 +281,13 @@ const TrashPage = () => {
                       <span className="block text-xs">by {deletedBy(p.deletedBy)}</span>
                     </td>
                     <td className="px-6 py-3.5 text-right">
-                      <RestoreButton
-                        busy={busyId === p.id}
-                        onClick={() => restore(p.id, () => restoreFromTrash(p, user.uid), `${p.name} has been restored, with all visits, bills and session logs.`)}
-                      />
+                      <div className="inline-flex items-center gap-2 justify-end flex-wrap">
+                        <RestoreButton
+                          busy={busyId === p.id}
+                          onClick={() => restore(p.id, () => restoreFromTrash(p, user.uid), `${p.name} has been restored, with all visits, bills and session logs.`)}
+                        />
+                        <DeleteButton disabled={busyId === p.id} onClick={() => openDelete('patient', p)} />
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -248,14 +340,17 @@ const TrashPage = () => {
                         <span className="block text-xs">by {deletedBy(b.deletedBy)}</span>
                       </td>
                       <td className="px-6 py-3.5 text-right">
-                        <RestoreButton
-                          busy={busyId === b.id}
-                          disabled={patientTrashed}
-                          title={patientTrashed ? 'Restore the patient first' : undefined}
-                          onClick={() =>
-                            restore(b.id, () => restoreBillFromTrash(b, user.uid), `The bill was restored to ${b.patient?.name || 'the patient'}'s ledger and balance.`)
-                          }
-                        />
+                        <div className="inline-flex items-center gap-2 justify-end flex-wrap">
+                          <RestoreButton
+                            busy={busyId === b.id}
+                            disabled={patientTrashed}
+                            title={patientTrashed ? 'Restore the patient first' : undefined}
+                            onClick={() =>
+                              restore(b.id, () => restoreBillFromTrash(b, user.uid), `The bill was restored to ${b.patient?.name || 'the patient'}'s ledger and balance.`)
+                            }
+                          />
+                          <DeleteButton disabled={busyId === b.id} onClick={() => openDelete('bill', b)} />
+                        </div>
                       </td>
                     </tr>
                   );
@@ -285,12 +380,15 @@ const TrashPage = () => {
                       <span className="block text-xs">by {deletedBy(s.deletedBy)}</span>
                     </td>
                     <td className="px-6 py-3.5 text-right">
-                      <RestoreButton
-                        busy={busyId === s.id}
-                        onClick={() =>
-                          restore(s.id, () => setStaffStatus(s, 'active', user.uid), `${s.name}'s account has been restored. They can sign in again with their existing password.`)
-                        }
-                      />
+                      <div className="inline-flex items-center gap-2 justify-end flex-wrap">
+                        <RestoreButton
+                          busy={busyId === s.id}
+                          onClick={() =>
+                            restore(s.id, () => setStaffStatus(s, 'active', user.uid), `${s.name}'s account has been restored. They can sign in again with their existing password.`)
+                          }
+                        />
+                        <DeleteButton disabled={busyId === s.id} onClick={() => openDelete('staff', s)} />
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -302,6 +400,20 @@ const TrashPage = () => {
           )}
         </table>
       </div>
+
+      <DeleteConfirmModal
+        isOpen={!!deleting}
+        onClose={() => setDeleting(null)}
+        title={deleteDialog?.title || ''}
+        description={deleteDialog?.description || ''}
+        note=""
+        phraseLabel={deleteDialog?.phraseLabel}
+        confirmPhrase={deleteDialog?.phrase || ''}
+        confirmLabel="Delete Permanently"
+        onConfirm={confirmDelete}
+      >
+        {deleting?.kind === 'patient' && <PatientDeleteImpact patient={deleting.item} />}
+      </DeleteConfirmModal>
     </div>
   );
 };

@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
-import { collection, collectionGroup, doc, onSnapshot, query, where, updateDoc, Timestamp } from 'firebase/firestore';
+import { useMemo } from 'react';
+import { doc, updateDoc } from 'firebase/firestore';
 import {
   CalendarClock, MessageSquare, Briefcase, UserPlus, UserCog, AlertTriangle, HandCoins, Tag, ClipboardList,
 } from 'lucide-react';
 import { db } from '../../lib/firebase';
 import { useAuth } from '../auth/AuthContext';
+import { useLiveSources } from '../data/liveStore';
+import { SOURCES, recentPatientsSource, todaysSessionLogsSource } from '../data/sources';
 import { formatMoney } from '../billing/money';
 import { balancesByPatient, isSameDay } from '../dashboard/dashboardStats';
 import { matchesDepartmentFilter } from '../departments/departmentFilters';
@@ -22,37 +24,7 @@ const TYPES_BY_ROLE = {
 const NEW_PATIENT_WINDOW_DAYS = 7;
 const MAX_EVENTS = 25;
 
-const rows = (snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 const at = (ts) => (ts?.toDate ? ts.toDate() : null);
-
-// Subscribes only while `enabled`; returns null until the first snapshot arrives.
-function useLive(enabled, buildQuery, mapSnap = rows) {
-  const [data, setData] = useState(null);
-  useEffect(() => {
-    if (!enabled) {
-      setData(null);
-      return undefined;
-    }
-    return onSnapshot(buildQuery(), (snap) => setData(mapSnap(snap)), () => setData(null));
-    // buildQuery/mapSnap are stable module-level functions at every call site.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled]);
-  return data;
-}
-
-const patientRows = (snap) => snap.docs.map((d) => ({ id: d.id, patientId: d.ref.parent.parent.id, ...d.data() }));
-const qInquiries = () => query(collection(db, 'inquiries'), where('status', '==', 'new'));
-const qApplications = () => query(collection(db, 'jobApplications'), where('status', '==', 'new'));
-const qRequests = () => query(collection(db, 'userRequests'), where('status', '==', 'pending'));
-const qSettlements = () => query(collection(db, 'hospitalSettlements'), where('status', '==', 'pending'));
-const qDepartments = () => collection(db, 'departments');
-const qTransactions = () => collectionGroup(db, 'transactions');
-const qSessionLogs = () => collectionGroup(db, 'sessionLogs');
-const qRecentPatients = () => {
-  const since = new Date();
-  since.setDate(since.getDate() - NEW_PATIENT_WINDOW_DAYS);
-  return query(collection(db, 'patients'), where('createdAt', '>=', Timestamp.fromDate(since)));
-};
 
 // trashedIds: patients in the Trash, whose bills, settlements and sessions must not
 // raise notifications.
@@ -88,14 +60,27 @@ export function useNotifications(trashedIds = new Set()) {
 
   // Inquiry listeners also feed the sidebar's Inquiries badge, so they run for anyone
   // who can view inquiries — even a role that doesn't get inquiry notifications.
-  const inquiries = useLive(canViewInquiries, qInquiries);
-  const applications = useLive(canViewInquiries, qApplications);
-  const requests = useLive(has('accountRequest'), qRequests);
-  const recentPatientsRaw = useLive(has('newPatient'), qRecentPatients);
-  const transactionsRaw = useLive(has('dues'), qTransactions, patientRows);
-  const settlementsRaw = useLive(has('settlement'), qSettlements);
-  const departments = useLive(has('pricing'), qDepartments);
-  const sessionLogsRaw = useLive(has('noSessionsToday'), qSessionLogs, patientRows);
+  // Shared live sources: the Dashboard, Billing, Departments, Inquiries and User
+  // Management screens reuse these same listeners instead of downloading again.
+  const live = useLiveSources({
+    inquiries: canViewInquiries ? SOURCES.newInquiries : null,
+    applications: canViewInquiries ? SOURCES.newApplications : null,
+    requests: has('accountRequest') ? SOURCES.userRequests : null,
+    recentPatients: has('newPatient') ? recentPatientsSource(NEW_PATIENT_WINDOW_DAYS) : null,
+    transactions: has('dues') ? SOURCES.transactions : null,
+    settlements: has('settlement') ? SOURCES.pendingSettlements : null,
+    departments: has('pricing') ? SOURCES.departments : null,
+    // Only today's logs are needed to tell a therapist whether they've logged today.
+    sessionLogs: has('noSessionsToday') ? todaysSessionLogsSource() : null,
+  });
+  const inquiries = live.inquiries.data;
+  const applications = live.applications.data;
+  const requests = live.requests.data;
+  const recentPatientsRaw = live.recentPatients.data;
+  const transactionsRaw = live.transactions.data;
+  const settlementsRaw = live.settlements.data;
+  const departments = live.departments.data;
+  const sessionLogsRaw = live.sessionLogs.data;
 
   const trashKey = [...trashedIds].sort().join(',');
   const { recentPatients, transactions, settlements, sessionLogs } = useMemo(() => {

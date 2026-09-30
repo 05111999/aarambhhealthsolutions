@@ -31,7 +31,6 @@ export const PERMISSION_CATALOG = {
     label: 'Billing',
     actions: {
       view: 'View billing & patient ledger',
-      create: 'Bill a service to a patient',
       discount: 'Apply a discount',
       recordPayment: 'Record a patient payment',
       backdate: 'Bill or record a payment with a past date',
@@ -49,6 +48,15 @@ export const PERMISSION_CATALOG = {
     actions: {
       view: 'View public form submissions',
       manage: 'Update status, delete spam',
+    },
+  },
+  // Editing and moving bills to Trash are Admin-and-above only (enforced in
+  // firestore.rules), so only view/create are grantable here.
+  bills: {
+    label: 'Bills / Medical Invoices',
+    actions: {
+      view: 'View bills (therapists see only their own, assigned and department bills)',
+      create: 'Create bills',
     },
   },
   sessionLogs: {

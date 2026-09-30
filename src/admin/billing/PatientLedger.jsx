@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
-import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
+import React, { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Wallet, CreditCard, Receipt, Trash2 } from 'lucide-react';
-import { db } from '../../lib/firebase';
+import { useLiveSource } from '../data/liveStore';
+import { patientTransactionsSource } from '../data/sources';
 import { useAuth } from '../auth/AuthContext';
 import { usePermission } from '../permissions/usePermission';
 import { formatMoney } from './money';
@@ -23,22 +24,24 @@ function isBackdatedTxn(t) {
 }
 
 // readOnly: the patient is in the Trash — show the ledger, allow no payments or deletes.
-const PatientLedger = ({ patientId, readOnly = false }) => {
+const PatientLedger = ({ patientId, readOnly = false, activeEncounterId = null }) => {
   const { user, profile } = useAuth();
   const canRecordPayment = usePermission('billing', 'recordPayment') && !readOnly;
-  const canDeleteTransactions = profile?.role === 'superadmin' && !readOnly;
-  const [transactions, setTransactions] = useState([]);
+  const canDeleteTransactions = (profile?.role === 'superadmin' || profile?.role === 'admin') && !readOnly;
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [deletingTxn, setDeletingTxn] = useState(null);
 
-  useEffect(() => {
-    const unsubscribe = onSnapshot(
-      query(collection(db, 'patients', patientId, 'transactions'), orderBy('createdAt', 'desc')),
-      // Bills in the Trash are hidden here; Super Admin can restore them from the Trash page.
-      (snap) => setTransactions(snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((t) => !t.isDeleted))
-    );
-    return unsubscribe;
-  }, [patientId]);
+  // Same shared listener as usePatientBalance below. Newest first; unsaved entries
+  // (no server createdAt yet) at the top. Bills in the Trash are hidden here; Super Admin
+  // can restore them from the Trash page.
+  const { data: ledgerData } = useLiveSource(patientTransactionsSource(patientId));
+  const transactions = useMemo(
+    () =>
+      (ledgerData || [])
+        .filter((t) => !t.isDeleted)
+        .sort((a, b) => (b.createdAt?.toMillis?.() ?? Number.MAX_SAFE_INTEGER) - (a.createdAt?.toMillis?.() ?? Number.MAX_SAFE_INTEGER)),
+    [ledgerData]
+  );
 
   const { balance } = usePatientBalance(patientId);
 
@@ -82,8 +85,22 @@ const PatientLedger = ({ patientId, readOnly = false }) => {
               <div>
                 <p className="text-sm font-medium text-text-dark">
                   {t.type === 'payment' ? `Payment — ${METHOD_LABELS[t.method] || t.method}` : t.serviceName}
+                  {t.billId && (
+                    <Link to={`/admin/bills/${t.billId}`} className="ml-2 text-xs font-semibold text-primary cursor-pointer hover:text-teal">
+                      View bill
+                    </Link>
+                  )}
+                  {t.type === 'payment' && (
+                    <Link to={`/admin/patients/${patientId}/receipts/${t.id}`} className="ml-2 text-xs font-semibold text-primary cursor-pointer hover:text-teal">
+                      Receipt
+                    </Link>
+                  )}
                 </p>
+                {t.billId && t.items?.length > 0 && (
+                  <p className="text-xs text-text-muted mt-0.5">{t.items.map((i) => i.name).join(', ')}</p>
+                )}
                 <p className="text-xs text-text-muted mt-0.5">
+                  {t.receiptNumber && <span className="font-mono">{t.receiptNumber} · </span>}
                   {t.type === 'charge' && `${t.departmentName} · `}
                   {t.date?.toDate ? t.date.toDate().toLocaleDateString() : 'Just now'}
                   {isBackdatedTxn(t) && (
@@ -112,14 +129,18 @@ const PatientLedger = ({ patientId, readOnly = false }) => {
         {transactions.length === 0 && <p className="text-text-muted text-sm py-6 text-center">No transactions yet.</p>}
       </div>
 
-      <RecordPaymentModal isOpen={showPaymentModal} onClose={() => setShowPaymentModal(false)} patientId={patientId} />
+      <RecordPaymentModal isOpen={showPaymentModal} onClose={() => setShowPaymentModal(false)} patientId={patientId} encounterId={activeEncounterId} />
 
       <DeleteConfirmModal
         isOpen={!!deletingTxn}
         onClose={() => setDeletingTxn(null)}
         title="Move Bill to Trash"
-        description="This removes the entry from the patient's ledger and balance. Nothing is erased."
-        note="You can restore it from Trash at any time."
+        description={
+          deletingTxn?.billId
+            ? 'This moves the whole bill and its charge out of the patient’s ledger and balance. Nothing is erased.'
+            : "This removes the entry from the patient's ledger and balance. Nothing is erased."
+        }
+        note={profile?.role === 'superadmin' ? 'You can restore it from Trash at any time.' : 'A Super Admin can restore it from Trash.'}
         confirmLabel="Move to Trash"
         busyLabel="Moving…"
         confirmPhrase={deleteConfirmPhrase}

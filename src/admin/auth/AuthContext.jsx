@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
 import { collection, doc, onSnapshot } from 'firebase/firestore';
+import { resetLiveStore } from '../data/liveStore';
 import { auth } from '../../lib/auth';
 import { db } from '../../lib/firebase';
 
@@ -18,7 +19,11 @@ export const AuthProvider = ({ children }) => {
   const [accessError, setAccessError] = useState('');
 
   useEffect(() => {
+    let currentUid = null;
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      // Shared live data belongs to whoever was signed in; drop it on sign-out or account switch.
+      if ((firebaseUser?.uid ?? null) !== currentUid) resetLiveStore();
+      currentUid = firebaseUser?.uid ?? null;
       setUser(firebaseUser);
       setAuthResolved(true);
       if (!firebaseUser) {
@@ -71,8 +76,9 @@ export const AuthProvider = ({ children }) => {
     return (moduleKey, action) => {
       if (!profile || profile.status !== 'active') return false;
       if (profile.role === 'superadmin') return true;
-      const override = profile.permissions?.[moduleKey]?.[action];
-      if (override !== undefined) return override;
+      // A ticked override grants on top of the role's defaults; an unticked one means
+      // "use the role default" (as User Management says). firestore.rules can() matches.
+      if (profile.permissions?.[moduleKey]?.[action] === true) return true;
       return roleDefaults?.[profile.role]?.[moduleKey]?.[action] ?? false;
     };
   }, [profile, roleDefaults]);

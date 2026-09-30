@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
-import { collection, onSnapshot } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
+import { useMemo } from 'react';
+import { useLiveSource } from '../data/liveStore';
+import { patientTransactionsSource } from '../data/sources';
 import { roundMoney } from '../billing/money';
 
 // Shared with PatientLedger's own transaction list so the two never compute the
@@ -11,18 +11,12 @@ import { roundMoney } from '../billing/money';
 // must pass false — those Firestore rules don't grant them read access to
 // transactions at all, so subscribing anyway would only produce a permission error.
 export function usePatientBalance(patientId, enabled = true) {
-  const [transactions, setTransactions] = useState([]);
-  const [loading, setLoading] = useState(enabled);
-
-  useEffect(() => {
-    if (!patientId || !enabled) return undefined;
-    const unsubscribe = onSnapshot(collection(db, 'patients', patientId, 'transactions'), (snap) => {
-      // Bills in the Trash don't count toward the balance (or the discharge check).
-      setTransactions(snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((t) => !t.isDeleted));
-      setLoading(false);
-    });
-    return unsubscribe;
-  }, [patientId, enabled]);
+  // Shared live source — PatientLedger reads the same listener, so a profile visit
+  // downloads the ledger once rather than twice.
+  const { data, loaded } = useLiveSource(enabled ? patientTransactionsSource(patientId) : null);
+  // Bills in the Trash don't count toward the balance (or the discharge check).
+  const transactions = useMemo(() => (data || []).filter((t) => !t.isDeleted), [data]);
+  const loading = enabled && !!patientId && !loaded;
 
   const balance = roundMoney(
     transactions.reduce((sum, t) => (t.type === 'payment' ? sum + roundMoney(t.amount) : sum - roundMoney(t.netAmount)), 0)

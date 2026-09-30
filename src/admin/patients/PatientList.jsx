@@ -1,12 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, query, where, orderBy, limit, onSnapshot, Timestamp } from 'firebase/firestore';
+import { collection, query, where, orderBy, limit, Timestamp } from 'firebase/firestore';
 import { Search, UserPlus, X } from 'lucide-react';
 import { db } from '../../lib/firebase';
+import { useLiveSource } from '../data/liveStore';
 import { usePermission } from '../permissions/usePermission';
 import { useUrlFilters } from '../useUrlFilters';
 import { usePatientSearch } from './usePatientSearch';
 import PatientOnboardingForm from './PatientOnboardingForm';
+import HelpLink from '../help/HelpLink';
 
 const STATUS_FILTERS = [
   { value: 'active', label: 'Active' },
@@ -58,38 +60,41 @@ const PatientList = () => {
   const statusFilter = filters.status;
   const hospitalOnly = filters.hospital === '1';
   const sinceMonth = filters.since === 'month';
-  const [patients, setPatients] = useState([]);
 
   const { results: searchResults, loading: searching } = usePatientSearch(searchTerm);
 
-  useEffect(() => {
-    if (searchTerm.trim()) return undefined; // search results take over below
-
-    const constraints = [];
-    if (typeFilter !== 'all') constraints.push(where('currentPatientType', '==', typeFilter));
-    if (statusFilter !== 'all') constraints.push(where('currentStatus', '==', statusFilter));
-    if (hospitalOnly) constraints.push(where('referredFromHospital', '==', true));
-    // Range on the same field as the orderBy, so every existing composite index still applies.
-    if (sinceMonth) constraints.push(where('createdAt', '>=', Timestamp.fromDate(startOfMonth())));
-    constraints.push(orderBy('createdAt', 'desc'));
-    constraints.push(limit(100));
-
-    const unsubscribe = onSnapshot(query(collection(db, 'patients'), ...constraints), (snap) => {
-      // Trashed patients are left out here rather than in the query: older records have no
-      // isDeleted field at all, and Firestore can't query for a missing field.
-      setPatients(snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((p) => !p.isDeleted));
-    });
-    return unsubscribe;
-  }, [typeFilter, statusFilter, hospitalOnly, sinceMonth, searchTerm]);
+  // Shared live source keyed by the filters: returning to the same view reuses it, and it
+  // stays subscribed while a search is shown (search results take over below), so
+  // clearing the search box doesn't download the list again.
+  const listKey = `patientList:${typeFilter}:${statusFilter}:${hospitalOnly ? 1 : 0}:${sinceMonth ? startOfMonth().getTime() : ''}`;
+  const { data: listData } = useLiveSource({
+    key: listKey,
+    query: () => {
+      const constraints = [];
+      if (typeFilter !== 'all') constraints.push(where('currentPatientType', '==', typeFilter));
+      if (statusFilter !== 'all') constraints.push(where('currentStatus', '==', statusFilter));
+      if (hospitalOnly) constraints.push(where('referredFromHospital', '==', true));
+      // Range on the same field as the orderBy, so every existing composite index still applies.
+      if (sinceMonth) constraints.push(where('createdAt', '>=', Timestamp.fromDate(startOfMonth())));
+      constraints.push(orderBy('createdAt', 'desc'));
+      constraints.push(limit(100));
+      return query(collection(db, 'patients'), ...constraints);
+    },
+    map: (snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() })),
+  });
+  // Trashed patients are left out here rather than in the query: older records have no
+  // isDeleted field at all, and Firestore can't query for a missing field.
+  const patients = useMemo(() => (listData || []).filter((p) => !p.isDeleted), [listData]);
 
   const rows = searchTerm.trim() ? searchResults : patients;
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-6">
         <div>
           <h1 className="mb-1">Patients</h1>
-          <p className="text-text-muted text-sm">Search, onboard, and manage patient records.</p>
+          <p className="text-text-muted text-sm mb-1">Search, onboard, and manage patient records.</p>
+          <HelpLink article="patient-add" label="How to add and find patients" />
         </div>
         {canCreate && (
           <button
@@ -152,8 +157,8 @@ const PatientList = () => {
         )}
       </div>
 
-      <div className="bg-white rounded-2xl border border-border overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white rounded-2xl border border-border overflow-x-auto">
+        <table className="w-full min-w-[720px] text-sm">
           <thead className="bg-bg text-text-muted text-xs uppercase tracking-wide">
             <tr>
               <th className="text-left px-6 py-3 font-semibold">Code</th>

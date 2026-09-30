@@ -13,7 +13,8 @@ import { usePermission } from '../permissions/usePermission';
 import { usePatientBalance } from './usePatientBalance';
 import { formatMoney } from '../billing/money';
 import PatientLedger from '../billing/PatientLedger';
-import BillingForm from '../billing/BillingForm';
+import PatientBillsPanel from '../bills/PatientBillsPanel';
+import { useTherapists } from '../settings/useDirectory';
 import EditPatientModal from './EditPatientModal';
 import ReadmitModal from './ReadmitModal';
 import DeleteConfirmModal from './DeleteConfirmModal';
@@ -40,7 +41,9 @@ const PatientProfile = () => {
   const { user, profile } = useAuth();
   const canEdit = usePermission('patients', 'edit');
   const canDischarge = usePermission('patients', 'dischargeOrClose');
-  const canBill = usePermission('billing', 'create');
+  const canCreateBill = usePermission('bills', 'create');
+  const canViewBills = usePermission('bills', 'view');
+  const { therapists } = useTherapists();
   const canViewBilling = usePermission('billing', 'view');
   const isSuperAdmin = profile?.role === 'superadmin';
 
@@ -49,7 +52,6 @@ const PatientProfile = () => {
   const [notFound, setNotFound] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [dischargeError, setDischargeError] = useState('');
-  const [showBillingForm, setShowBillingForm] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showReadmitModal, setShowReadmitModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -211,14 +213,14 @@ const PatientProfile = () => {
               Edit
             </button>
           )}
-          {canBill && (
-            <button
-              onClick={() => setShowBillingForm(true)}
-              className="inline-flex items-center gap-2 bg-primary text-white font-semibold px-5 py-2.5 rounded-lg hover:bg-light-blue transition-colors"
+          {canCreateBill && (
+            <Link
+              to={`/admin/bills/new?patient=${patientId}`}
+              className="inline-flex items-center gap-2 bg-primary text-white font-semibold px-5 py-2.5 rounded-lg cursor-pointer hover:bg-light-blue transition-colors"
             >
               <Receipt size={16} />
-              Add Charge
-            </button>
+              Create Bill
+            </Link>
           )}
           {canDischarge && patient.currentStatus === 'active' && (
             <button
@@ -271,6 +273,11 @@ const PatientProfile = () => {
               label="Attender"
               value={patient.attenderName ? [patient.attenderName, patient.attenderContact].filter(Boolean).join(' · ') : ''}
             />
+            <InfoRow
+              icon={UserCheck}
+              label="Assigned Therapists"
+              value={(patient.assignedTherapistIds || []).map((id) => therapists.find((t) => t.id === id)?.name).filter(Boolean).join(', ')}
+            />
           </div>
           <div className="bg-white rounded-2xl border border-border p-6 grid grid-cols-2 gap-4 text-sm">
             <div>
@@ -297,7 +304,7 @@ const PatientProfile = () => {
             <h3 className="text-base font-semibold text-text-dark mb-4">Encounter History</h3>
             <div className="space-y-3">
               {encounters.map((e) => (
-                <div key={e.id} className="flex items-center justify-between border border-border rounded-lg px-4 py-3">
+                <div key={e.id} className="flex items-center justify-between gap-3 flex-wrap border border-border rounded-lg px-4 py-3">
                   <div>
                     <p className="text-sm font-medium text-text-dark">{TYPE_LABELS[e.type] || e.type}</p>
                     <p className="text-xs text-text-muted mt-0.5">
@@ -305,13 +312,20 @@ const PatientProfile = () => {
                       {e.closedAt?.toDate ? ` · Closed ${e.closedAt.toDate().toLocaleDateString()}` : ''}
                     </p>
                   </div>
-                  <span
-                    className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold ${
-                      e.status === 'active' ? 'bg-teal/10 text-teal' : 'bg-bg text-text-muted'
-                    }`}
-                  >
-                    {e.status === 'active' ? 'Active' : 'Closed'}
-                  </span>
+                  <div className="flex items-center gap-3 shrink-0">
+                    {e.type === 'inpatient' && canViewBilling && (
+                      <Link to={`/admin/billing/ipd/${patientId}/${e.id}`} className="text-xs font-semibold text-primary hover:text-teal">
+                        IPD bill{e.admissionNumber ? ` ${e.admissionNumber}` : ''}
+                      </Link>
+                    )}
+                    <span
+                      className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold ${
+                        e.status === 'active' ? 'bg-teal/10 text-teal' : 'bg-bg text-text-muted'
+                      }`}
+                    >
+                      {e.status === 'active' ? 'Active' : 'Closed'}
+                    </span>
+                  </div>
                 </div>
               ))}
               {encounters.length === 0 && <p className="text-text-muted text-sm">No encounters recorded.</p>}
@@ -320,16 +334,13 @@ const PatientProfile = () => {
 
           <SessionLogPanel patientId={patientId} readOnly={inTrash} />
 
-          {canViewBilling && <PatientLedger patientId={patientId} readOnly={inTrash} />}
+          {canViewBills && !inTrash && <PatientBillsPanel patientId={patientId} canCreate={canCreateBill} />}
+
+          {canViewBilling && (
+            <PatientLedger patientId={patientId} readOnly={inTrash} activeEncounterId={encounters.find((e) => e.status === 'active')?.id || null} />
+          )}
         </div>
       </div>
-
-      <BillingForm
-        isOpen={showBillingForm}
-        onClose={() => setShowBillingForm(false)}
-        patientId={patientId}
-        encounterId={encounters.find((e) => e.status === 'active')?.id}
-      />
 
       <EditPatientModal isOpen={showEditModal} onClose={() => setShowEditModal(false)} patientId={patientId} patient={patient} />
 

@@ -47,6 +47,30 @@ service cloud.firestore {
       return isStaff() && role() in ['superadmin', 'admin', 'receptionist', 'therapist'];
     }
 
+    // Permission check that mirrors hasPermission() in AuthContext.jsx: Super Admin can
+    // do everything; otherwise a ticked Permission Override on the user's own doc
+    // (/users/{uid}.permissions) grants the action, else the role's defaults
+    // (/roleDefaults/{role}) decide. The role-based checks above stay as each rule's
+    // baseline — can() only ever ADDS access a Super Admin granted on top of it, so a
+    // Therapist given "Onboard new patients" can actually write the patient.
+    function roleDefaultAllows(moduleKey, action) {
+      let path = /databases/$(database)/documents/roleDefaults/$(role());
+      return exists(path) && get(path).data.get(moduleKey, {}).get(action, false) == true;
+    }
+
+    function can(moduleKey, action) {
+      return isStaff() && (
+        role() == 'superadmin'
+        || me().get('permissions', {}).get(moduleKey, {}).get(action, false) == true
+        || roleDefaultAllows(moduleKey, action)
+      );
+    }
+
+    // IPD (inpatient running bill) charges: needs the Billing screens and bill creation.
+    function canAddIpdCharges() {
+      return can('billing', 'view') && can('bills', 'create');
+    }
+
     // Roles the Super Admin may assign from the app. Creating another Super Admin is
     // deliberately excluded — that stays a provisioning-script operation.
     function isAssignableRole(r) {
@@ -91,7 +115,7 @@ service cloud.firestore {
     match /users/{uid} {
       // Reading your own doc is allowed even when inactive, so the app can tell a
       // deactivated user why they were signed out.
-      allow read: if signedIn() && (request.auth.uid == uid || isAdminOrAbove());
+      allow read: if signedIn() && (request.auth.uid == uid || isAdminOrAbove() || can('users', 'view'));
 
       // Super Admin creates staff accounts from the app (the login itself is created
       // client-side first). Only assignable roles, and always starting active.
@@ -115,8 +139,12 @@ service cloud.firestore {
         && request.resource.data.email == resource.data.email;
 
       // "Delete" is status 'deleted' — the doc is kept so the same login/email can be
-      // restored later without the Admin SDK.
-      allow delete: if false;
+      // restored later without the Admin SDK. Permanently deleting it (Trash › Delete) is
+      // Super Admin only, and only for an account already in the Trash.
+      allow delete: if isSuperAdmin()
+        && uid != request.auth.uid
+        && resource.data.status == 'deleted'
+        && resource.data.role != 'superadmin';
     }
 
     // ── /userRequests/{id} ── (legacy request flow — approved or dismissed from the app)
@@ -133,7 +161,10 @@ service cloud.firestore {
     // ── /auditLogs/{id} ──
     match /auditLogs/{id} {
       allow read: if isSuperAdmin();
-      allow create: if isSuperAdmin() && request.resource.data.performedBy == request.auth.uid;
+      // Admins edit and trash bills too, and each of those writes an audit entry in the
+      // same batch — so Admin+ may append entries about their own actions. Read stays
+      // Super-Admin-only, and entries can never be changed or removed.
+      allow create: if isAdminOrAbove() && request.resource.data.performedBy == request.auth.uid;
       allow update, delete: if false;
     }
 
@@ -154,7 +185,7 @@ service cloud.firestore {
       }
 
       allow read: if isTherapistOrAbove();
-      allow create: if isReceptionistOrAbove()
+      allow create: if (isReceptionistOrAbove() || can('patients', 'create'))
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.get('isDeleted', false) == false;
 
@@ -171,57 +202,125 @@ service cloud.firestore {
       // one of these two shapes, so this narrows the rule without losing any real capability.
       // (1) Profile edit: demographic fields only — never patientCode/currentStatus/
       //     currentPatientType/advanceAmount/createdBy/createdAt.
-      allow update: if isReceptionistOrAbove()
+      allow update: if (isReceptionistOrAbove() || can('patients', 'edit'))
         && !patientTrashed()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'name', 'nameLower', 'age', 'gender', 'address',
           'contact1', 'contact1Digits', 'contact2', 'contact2Digits',
           'primaryDiagnosis', 'attenderName', 'attenderContact', 'attenderContactDigits',
-          'sessionFrequency', 'referredFromHospital', 'referringHospitalName',
+          'sessionFrequency', 'referredFromHospital', 'referringHospitalName', 'referringHospitalId',
+          'assignedTherapistIds',
           'updatedBy', 'updatedAt'
         ]);
       // (2) Status transition: discharge or readmit — only these fields, and only to a
       //     valid status. The zero-balance-before-discharge rule is enforced client-side
       //     only (Firestore rules can't aggregate/sum the transactions subcollection, and
       //     there's no Cloud Functions budget on this project to do it server-side).
-      allow update: if isReceptionistOrAbove()
+      allow update: if (isReceptionistOrAbove() || can('patients', 'dischargeOrClose'))
         && !patientTrashed()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['currentStatus', 'currentPatientType', 'updatedBy', 'updatedAt'])
         && request.resource.data.currentStatus in ['active', 'discharged'];
 
-      // Patients are never permanently deleted — "Delete" moves them to the Trash.
-      allow delete: if false;
+      // "Delete" moves a patient to the Trash. Permanent deletion (Trash › Delete) is
+      // Super Admin only and only for a patient already in the Trash; the app deletes their
+      // visits, ledger, session logs, bills and settlement entries first.
+      allow delete: if isSuperAdmin() && resource.data.get('isDeleted', false) == true;
 
       match /encounters/{encounterId} {
         allow read: if isTherapistOrAbove();
-        allow create: if isReceptionistOrAbove() && request.resource.data.createdBy == request.auth.uid && !parentTrashed();
-        allow update: if isReceptionistOrAbove() && !parentTrashed();
-        allow delete: if false;
+        // Onboarding creates the first visit; readmitting creates a new one.
+        allow create: if (isReceptionistOrAbove() || can('patients', 'create') || can('patients', 'dischargeOrClose'))
+          && request.resource.data.createdBy == request.auth.uid && !parentTrashed();
+        // Discharge closes a visit; admission details are a patient edit; IPD charges
+        // advance the admission's bill number / charge counter.
+        allow update: if (isReceptionistOrAbove() || can('patients', 'dischargeOrClose') || can('patients', 'edit') || canAddIpdCharges())
+          && !parentTrashed();
+        // Only when permanently deleting a patient who is in the Trash.
+        allow delete: if isSuperAdmin() && parentTrashed();
       }
 
-      // Append-only financial ledger: a charge or a payment, corrections are new
-      // offsetting transactions per "never overwrite financial data" — update stays
-      // permanently disabled. Delete is Super-Admin-only, added per explicit instruction,
-      // same type-to-confirm UI gate as patient delete.
+      // Financial ledger: charges and payments. Nothing is ever deleted (removing moves an
+      // entry to the Trash). The only edits allowed are the narrow, Admin+ corrections
+      // below (bill-linked charges, IPD charges, payment details), each audit-logged.
       match /transactions/{transactionId} {
-        allow read: if isReceptionistOrAbove();
+        allow read: if isReceptionistOrAbove() || can('billing', 'view');
         allow create: if isReceptionistOrAbove()
           && request.resource.data.createdBy == request.auth.uid
           && !parentTrashed()
-          && (!isBackdated() || isAdminOrAbove())
+          && (!isBackdated() || isAdminOrAbove() || can('billing', 'backdate'))
           && (
             request.resource.data.type != 'charge' ||
             request.resource.data.netAmount == request.resource.data.amount - request.resource.data.discountAmount
           );
-        // The amounts are still never editable. The only change allowed is Super Admin
-        // moving a bill to / restoring it from the Trash — and never while the patient
-        // itself is in the Trash (restore the patient first).
-        allow update: if isSuperAdmin()
+        // Therapists can create a charge only as part of a bill written in the same
+        // transaction, and only for exactly that bill's total.
+        allow create: if isTherapistOrAbove()
+          && request.resource.data.createdBy == request.auth.uid
+          && !parentTrashed()
+          && (!isBackdated() || can('billing', 'backdate'))
+          && request.resource.data.type == 'charge'
+          && request.resource.data.billId is string
+          && request.resource.data.netAmount == request.resource.data.amount - request.resource.data.discountAmount
+          && getAfter(/databases/$(database)/documents/bills/$(request.resource.data.billId)).data.total == request.resource.data.netAmount;
+        // A payment by someone granted "Record a patient payment" — or the advance taken
+        // while onboarding a patient, by someone granted "Onboard new patients".
+        allow create: if (can('billing', 'recordPayment')
+            || (can('patients', 'create') && request.resource.data.get('method', null) == 'advance'))
+          && request.resource.data.createdBy == request.auth.uid
+          && !parentTrashed()
+          && (!isBackdated() || can('billing', 'backdate'))
+          && request.resource.data.type == 'payment'
+          && request.resource.data.amount is number
+          && request.resource.data.amount > 0;
+        // An IPD charge by someone granted the Billing screens plus bill creation. No
+        // discount on these, same as the Admin correction rule below.
+        allow create: if canAddIpdCharges()
+          && request.resource.data.createdBy == request.auth.uid
+          && !parentTrashed()
+          && !isBackdated()
+          && request.resource.data.type == 'charge'
+          && request.resource.data.get('ipd', false) == true
+          && request.resource.data.discountAmount == 0
+          && request.resource.data.netAmount == request.resource.data.amount;
+        // Moving a charge/payment to / restoring it from the Trash — Admin and above, and
+        // never while the patient itself is in the Trash (restore the patient first).
+        allow update: if isAdminOrAbove()
           && !parentTrashed()
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isDeleted', 'deletedAt', 'deletedBy', 'restoredAt', 'restoredBy'])
           && request.resource.data.isDeleted is bool;
-        // Bills are never permanently deleted — "Delete" moves them to the Trash.
-        allow delete: if false;
+        // Editing a bill (Admin+) updates its linked charge to match. Only bill-linked
+        // charges, and the charge must still add up (net = amount − discount).
+        allow update: if isAdminOrAbove()
+          && !parentTrashed()
+          && resource.data.get('billId', null) is string
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'amount', 'discountAmount', 'netAmount', 'items', 'date', 'updatedAt', 'updatedBy'
+          ])
+          && request.resource.data.netAmount == request.resource.data.amount - request.resource.data.discountAmount;
+        // Correcting an IPD (inpatient running bill) charge — Admin and above; the app
+        // writes the before/after to the audit log in the same batch. No discount on these.
+        allow update: if isAdminOrAbove()
+          && !parentTrashed()
+          && resource.data.get('ipd', false) == true
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'serviceDate', 'category', 'serviceName', 'description', 'quantity', 'rate',
+            'amount', 'netAmount', 'updatedAt', 'updatedBy'
+          ])
+          && request.resource.data.discountAmount == 0
+          && request.resource.data.netAmount == request.resource.data.amount;
+        // Correcting a payment's details — Admin and above, audit-logged by the app. The
+        // receipt number, date and who recorded it never change.
+        allow update: if isAdminOrAbove()
+          && !parentTrashed()
+          && resource.data.type == 'payment'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'amount', 'method', 'reference', 'remarks', 'updatedAt', 'updatedBy'
+          ])
+          && request.resource.data.amount is number
+          && request.resource.data.amount > 0;
+        // "Delete" moves an entry to the Trash. Permanent deletion is Super Admin only:
+        // an entry already in the Trash, or any entry of a patient in the Trash.
+        allow delete: if isSuperAdmin() && (resource.data.get('isDeleted', false) == true || parentTrashed());
       }
 
       // Daily treatment progress. Unlike the financial ledger, this is clinical
@@ -230,59 +329,142 @@ service cloud.firestore {
       match /sessionLogs/{logId} {
         allow read: if isTherapistOrAbove();
         allow create: if isTherapistOrAbove() && request.resource.data.recordedBy == request.auth.uid && !parentTrashed();
-        allow update: if isAdminOrAbove() && !parentTrashed();
-        allow delete: if isAdminOrAbove() && !parentTrashed();
+        allow update: if (isAdminOrAbove() || can('sessionLogs', 'manage')) && !parentTrashed();
+        allow delete: if (isAdminOrAbove() || can('sessionLogs', 'manage')) && !parentTrashed();
+        // Permanently deleting a patient who is in the Trash.
+        allow delete: if isSuperAdmin() && parentTrashed();
       }
     }
 
     // ── /counters/{counterId} ── (patient code sequence, incremented inside a client transaction)
     match /counters/{counterId} {
       allow read, write: if isReceptionistOrAbove();
+      // Therapists create bills too, so they may advance per-patient bill counters only.
+      allow read, write: if isTherapistOrAbove() && counterId.matches('bills_.*');
+      // Counters behind actions a Super Admin granted as a Permission Override.
+      allow read, write: if counterId.matches('patientCode_.*') && can('patients', 'create');
+      allow read, write: if counterId.matches('receipts_.*') && (can('billing', 'recordPayment') || can('patients', 'create'));
+      allow read, write: if counterId.matches('admissions_.*') && canAddIpdCharges();
+    }
+
+    // ── /hospitals/{id} ── (partner hospitals that brand a bill; managed by Super Admin)
+    match /hospitals/{id} {
+      allow read: if isStaff();
+      allow write: if isSuperAdmin();
+    }
+
+    // ── /therapists/{id} ── (physicians selectable on a bill; doc id = staff login uid when linked)
+    match /therapists/{id} {
+      allow read: if isStaff();
+      allow write: if isSuperAdmin();
+    }
+
+    // ── /bills/{billId} ── (medical invoices; each has a linked charge in the patient ledger)
+    match /bills/{billId} {
+      function billPatientTrashed(patientId) {
+        let path = /databases/$(database)/documents/patients/$(patientId);
+        return !exists(path) || get(path).data.get('isDeleted', false) == true;
+      }
+
+      // Receptionist and above see every bill. A Therapist sees a bill only if listed in
+      // visibleTo (creator, physician, the patient's assigned therapists, and therapists
+      // of the departments on the bill) — precomputed so list queries can be enforced.
+      // Billing access, or editing patients (changing a patient's assigned therapists
+      // re-reads that patient's bills to update visibleTo), also sees every bill.
+      allow read: if isReceptionistOrAbove()
+        || can('billing', 'view') || can('patients', 'edit')
+        || (isTherapistOrAbove() && request.auth.uid in resource.data.visibleTo);
+
+      // The tax % set by the Super Admin in Settings › Bill Settings (0 until set).
+      function billingTaxPercent() {
+        let path = /databases/$(database)/documents/settings/billing;
+        return exists(path) ? get(path).data.get('taxPercent', 0) : 0;
+      }
+
+      allow create: if isTherapistOrAbove()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.tax.type == 'percent'
+        && request.resource.data.tax.value == billingTaxPercent()
+        && request.resource.data.get('isDeleted', false) == false
+        && request.resource.data.total is number
+        && request.resource.data.visibleTo is list
+        && !billPatientTrashed(request.resource.data.patientId)
+        && (request.resource.data.invoiceDate == request.time || isAdminOrAbove() || can('billing', 'backdate'));
+
+      // Edit or move to / restore from Trash — Admin and above. Identity fields never change.
+      allow update: if isAdminOrAbove()
+        && !billPatientTrashed(resource.data.patientId)
+        && request.resource.data.billNumber == resource.data.billNumber
+        && request.resource.data.patientId == resource.data.patientId
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.transactionId == resource.data.transactionId
+        && request.resource.data.total is number;
+
+      // Visibility bookkeeping only, when a patient's assigned therapists change.
+      allow update: if (isReceptionistOrAbove() || can('patients', 'edit'))
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['visibleTo'])
+        && request.resource.data.visibleTo is list;
+
+      // "Delete" moves a bill to the Trash. Permanent deletion is Super Admin only: a bill
+      // in the Trash, or a bill of a patient in the Trash.
+      allow delete: if isSuperAdmin()
+        && (resource.data.get('isDeleted', false) == true || billPatientTrashed(resource.data.patientId));
     }
 
     // ── /departments/{id} ── (flat tree via parentId; not sensitive, readable by any staff)
     match /departments/{id} {
       allow read: if isStaff();
-      allow create, update: if isAdminOrAbove();
+      allow create, update: if isAdminOrAbove() || can('departments', 'manage');
       // Childless-node check happens app-side (rules can't query); this just gates the role.
-      allow delete: if isAdminOrAbove();
+      allow delete: if isAdminOrAbove() || can('departments', 'manage');
     }
 
     // ── /hospitalSettlements/{id} ── (hospital-covered inpatient-day accrual; never patient-facing)
     match /hospitalSettlements/{id} {
-      allow read: if isAdminOrAbove();
-      allow create: if isAdminOrAbove() && request.resource.data.status == 'pending';
+      allow read: if isAdminOrAbove() || can('hospitalSettlement', 'view');
+      // Opening the Hospital Settlement page accrues any missing days, so viewers create.
+      allow create: if (isAdminOrAbove() || can('hospitalSettlement', 'view')) && request.resource.data.status == 'pending';
       // Only the collection-status fields may ever change after creation — amount/date/
       // patientId are permanent once accrued, protecting against a re-accrual overwrite bug.
-      allow update: if isAdminOrAbove()
+      allow update: if (isAdminOrAbove() || can('hospitalSettlement', 'manage'))
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'collectedAt', 'collectedBy', 'reference', 'updatedAt']);
-      allow delete: if false;
+      // Only when permanently deleting a patient who is in the Trash.
+      allow delete: if isSuperAdmin() && settlementPatientTrashed(resource.data.patientId);
+      function settlementPatientTrashed(patientId) {
+        let path = /databases/$(database)/documents/patients/$(patientId);
+        return exists(path) && get(path).data.get('isDeleted', false) == true;
+      }
     }
 
     // ── /settings/{id} ── (e.g. hospitalDailyRate)
     match /settings/{id} {
       allow read: if isAdminOrAbove();
+      // Bill settings (tax %) are used by everyone who creates bills.
+      allow read: if isStaff() && id == 'billing';
+      // The daily rate drives the Hospital Settlement page.
+      allow read: if id == 'hospitalDailyRate' && can('hospitalSettlement', 'view');
       allow write: if isSuperAdmin();
     }
 
     // ── /inquiries/{id} ── (Booking + Contact form submissions — public write, staff-only read)
     match /inquiries/{id} {
-      allow read: if isReceptionistOrAbove();
+      allow read: if isReceptionistOrAbove() || can('inquiries', 'view');
       allow create: if isValidInquiry();
-      allow update: if isReceptionistOrAbove()
+      allow update: if (isReceptionistOrAbove() || can('inquiries', 'manage'))
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'updatedBy']);
       // Deviates from this app's usual "never delete" stance: this collection is publicly
-      // writable and will attract spam, so Super Admin needs a way to clean it up.
-      allow delete: if isSuperAdmin();
+      // writable and will attract spam, so whoever manages inquiries (Receptionist and
+      // above by default, or a granted override) needs a way to clean it up.
+      allow delete: if isSuperAdmin() || can('inquiries', 'manage');
     }
 
     // ── /jobApplications/{id} ── (Careers form — public write, staff-only read)
     match /jobApplications/{id} {
-      allow read: if isReceptionistOrAbove();
+      allow read: if isReceptionistOrAbove() || can('inquiries', 'view');
       allow create: if isValidJobApplication();
-      allow update: if isReceptionistOrAbove()
+      allow update: if (isReceptionistOrAbove() || can('inquiries', 'manage'))
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'updatedBy']);
-      allow delete: if isSuperAdmin();
+      allow delete: if isSuperAdmin() || can('inquiries', 'manage');
     }
 
     // A nested `match` only grants access via its direct path — it does NOT cover
@@ -290,7 +472,7 @@ service cloud.firestore {
     // the Reports dashboard). That needs its own top-level rule via the {path=**} wildcard.
     // Writes still only ever happen through the direct path above.
     match /{path=**}/transactions/{transactionId} {
-      allow read: if isReceptionistOrAbove();
+      allow read: if isReceptionistOrAbove() || can('billing', 'view');
     }
 
     // Same, for the cross-patient Therapy Sessions page and dashboard counts.

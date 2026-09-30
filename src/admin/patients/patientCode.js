@@ -1,4 +1,5 @@
 import { runTransaction, doc, collection, serverTimestamp } from 'firebase/firestore';
+import { formatReceiptNumber, receiptCounterRef, receiptFields } from '../billing/receiptService';
 import { roundMoney } from '../billing/money';
 
 function getMMYY(date = new Date()) {
@@ -47,6 +48,8 @@ export async function createPatient(db, formData, uid) {
       sessionFrequency: formData.sessionFrequency || '',
       referredFromHospital: !!formData.referredFromHospital,
       referringHospitalName: formData.referredFromHospital ? formData.referringHospitalName || '' : '',
+      referringHospitalId: formData.referredFromHospital ? formData.referringHospitalId || null : null,
+      assignedTherapistIds: formData.assignedTherapistIds || [],
       createdBy: uid,
       createdAt: serverTimestamp(),
       updatedBy: uid,
@@ -65,6 +68,8 @@ export async function createPatient(db, formData, uid) {
     });
 
     if (advanceTxnRef) {
+      // A brand-new patient has no receipts yet, so the advance is receipt no. 1.
+      tx.set(receiptCounterRef(patientRef.id), { seq: 1 });
       tx.set(advanceTxnRef, {
         type: 'payment',
         amount: advanceAmount,
@@ -72,6 +77,12 @@ export async function createPatient(db, formData, uid) {
         reference: '',
         encounterId: encounterRef.id,
         date: serverTimestamp(),
+        ...receiptFields({
+          receiptNumber: formatReceiptNumber(patientCode, 1),
+          hospital: formData.receiptHospital,
+          receivedBy: uid,
+          receivedByName: formData.receivedByName,
+        }),
         createdBy: uid,
         createdAt: serverTimestamp(),
       });

@@ -26,8 +26,21 @@ export async function getDailyRate(db) {
 // inpatient, from their admission date through today (or their discharge date if that
 // already happened). Deterministic doc IDs + a per-day transaction make this safe to
 // call repeatedly — already-accrued days are always a no-op, even under concurrency.
-export async function runAccrual(db, uid) {
-  const dailyRate = await getDailyRate(db);
+//
+// `existingIds` is the set of settlement doc IDs the caller already has loaded (the
+// Hospital Settlement page keeps them live). Days already in it are skipped without a
+// read, so a repeat visit costs nothing instead of one read per day of every stay.
+// Missing days still go through the transaction, so concurrent callers stay safe.
+// One run at a time per browser tab: revisiting the page while a run is still going
+// joins it instead of starting a second run that would contend for the same days.
+let inFlight = null;
+export function runAccrual(db, uid, options) {
+  if (!inFlight) inFlight = accrue(db, uid, options).finally(() => { inFlight = null; });
+  return inFlight;
+}
+
+async function accrue(db, uid, { dailyRate, existingIds = new Set() } = {}) {
+  if (dailyRate === undefined) dailyRate = await getDailyRate(db);
   if (dailyRate <= 0) return { created: 0 };
 
   const patientsSnap = await getDocs(
@@ -54,7 +67,9 @@ export async function runAccrual(db, uid) {
 
       for (const day of dateRange(start, end)) {
         const dateKey = toDateKey(day);
-        const settlementRef = doc(db, 'hospitalSettlements', `${patientDoc.id}_${encounterDoc.id}_${dateKey}`);
+        const settlementId = `${patientDoc.id}_${encounterDoc.id}_${dateKey}`;
+        if (existingIds.has(settlementId)) continue;
+        const settlementRef = doc(db, 'hospitalSettlements', settlementId);
 
         const wasCreated = await runTransaction(db, async (tx) => {
           const snap = await tx.get(settlementRef);

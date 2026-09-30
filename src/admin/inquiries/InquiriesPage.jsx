@@ -1,7 +1,9 @@
-import React, { useEffect, useState } from 'react';
-import { collection, doc, query, orderBy, onSnapshot, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import React, { useMemo } from 'react';
+import { doc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { Inbox, Phone, Mail, Calendar, Trash2, CheckCircle2 } from 'lucide-react';
 import { db } from '../../lib/firebase';
+import { useLiveSource } from '../data/liveStore';
+import { SOURCES } from '../data/sources';
 import { useAuth } from '../auth/AuthContext';
 import { usePermission } from '../permissions/usePermission';
 import { useUrlFilters } from '../useUrlFilters';
@@ -40,16 +42,15 @@ const InquiriesPage = () => {
 
   const [filters, setFilters] = useUrlFilters(FILTER_DEFAULTS);
   const activeTab = TABS.some((t) => t.key === filters.tab) ? filters.tab : 'inquiries';
-  const [items, setItems] = useState([]);
 
   const tab = TABS.find((t) => t.key === activeTab);
 
-  useEffect(() => {
-    const unsubscribe = onSnapshot(query(collection(db, tab.collection), orderBy('createdAt', 'desc')), (snap) => {
-      setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
-    return unsubscribe;
-  }, [tab.collection]);
+  // Shared live source (the dashboard uses the same data); newest first.
+  const { data: itemData } = useLiveSource(tab.collection === 'inquiries' ? SOURCES.inquiries : SOURCES.applications);
+  const items = useMemo(
+    () => [...(itemData || [])].sort((a, b) => (b.createdAt?.toMillis?.() ?? Number.MAX_SAFE_INTEGER) - (a.createdAt?.toMillis?.() ?? Number.MAX_SAFE_INTEGER)),
+    [itemData]
+  );
 
   const updateStatus = async (id, status) => {
     await updateDoc(doc(db, tab.collection, id), { status, updatedBy: user.uid, updatedAt: serverTimestamp() });
@@ -67,20 +68,20 @@ const InquiriesPage = () => {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-6">
         <div>
           <h1 className="mb-1">Inquiries &amp; Applications</h1>
           <p className="text-text-muted text-sm">Booking requests, contact messages, and job applications from the public site.</p>
         </div>
       </div>
 
-      <div className="flex items-center gap-2 mb-6 border-b border-border">
+      <div className="flex items-center gap-1 sm:gap-2 mb-6 border-b border-border overflow-x-auto">
         {TABS.map((t) => (
           <button
             key={t.key}
             // Status/type options differ per tab, so switching tabs starts from a clean filter.
             onClick={() => setFilters({ tab: t.key }, { reset: true })}
-            className={`px-4 py-3 text-sm font-semibold border-b-2 -mb-px cursor-pointer transition-colors ${
+            className={`shrink-0 whitespace-nowrap px-3 sm:px-4 py-3 text-sm font-semibold border-b-2 cursor-pointer transition-colors ${
               activeTab === t.key ? 'border-primary text-primary' : 'border-transparent text-text-muted hover:text-text-dark'
             }`}
           >

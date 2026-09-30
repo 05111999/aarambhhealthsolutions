@@ -13,8 +13,9 @@ const FullScreenMessage = ({ title, message }) => (
 
 // Optionally gate on a specific permission via `module`/`action` props. Without them,
 // this only checks that the user is signed in and active.
-const ProtectedRoute = ({ module, action, superAdminOnly = false }) => {
+const ProtectedRoute = ({ module, action, superAdminOnly = false, adminOnly = false }) => {
   const { loading, isAuthenticated, hasPermission, profile } = useAuth();
+  const isAdminOrAbove = profile?.role === 'superadmin' || profile?.role === 'admin';
   const location = useLocation();
 
   if (loading) {
@@ -25,7 +26,11 @@ const ProtectedRoute = ({ module, action, superAdminOnly = false }) => {
     return <Navigate to="/admin/login" state={{ from: location }} replace />;
   }
 
-  if ((module && action && !hasPermission(module, action)) || (superAdminOnly && profile?.role !== 'superadmin')) {
+  if (
+    (module && action && !hasPermission(module, action))
+    || (superAdminOnly && profile?.role !== 'superadmin')
+    || (adminOnly && !isAdminOrAbove)
+  ) {
     return (
       <FullScreenMessage
         title="Unauthorized"

@@ -29,7 +29,7 @@ const SessionLogPanel = ({ patientId, readOnly = false }) => {
 
   return (
     <div className="bg-white rounded-2xl border border-border p-6">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
         <div className="flex items-center gap-2">
           <ClipboardList size={18} className="text-primary" />
           <h3 className="text-base font-semibold text-text-dark mb-0">Treatment Progress</h3>

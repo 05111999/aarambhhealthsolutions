@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { collection, collectionGroup, doc, onSnapshot, query, where, writeBatch, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import { useLiveSource } from '../data/liveStore';
+import { SOURCES } from '../data/sources';
 
 // Deleting a patient never erases anything: it sets isDeleted so the patient (and all
 // their visits, bills and session logs) disappears from every list and total, and
@@ -48,20 +50,22 @@ function billAudit(batch, action, patientId, bill, actorUid, isDeleted) {
   });
 }
 
+// A charge created by the bill generator carries billId; the bill document and its
+// ledger charge always move to and from the Trash together.
 export async function moveBillToTrash(patientId, bill, actorUid) {
   const batch = writeBatch(db);
-  batch.update(doc(db, 'patients', patientId, 'transactions', bill.id), {
-    isDeleted: true, deletedAt: serverTimestamp(), deletedBy: actorUid,
-  });
+  const trashFields = { isDeleted: true, deletedAt: serverTimestamp(), deletedBy: actorUid };
+  batch.update(doc(db, 'patients', patientId, 'transactions', bill.id), trashFields);
+  if (bill.billId) batch.update(doc(db, 'bills', bill.billId), trashFields);
   billAudit(batch, 'trashBill', patientId, bill, actorUid, true);
   await batch.commit();
 }
 
 export async function restoreBillFromTrash(bill, actorUid) {
   const batch = writeBatch(db);
-  batch.update(doc(db, 'patients', bill.patientId, 'transactions', bill.id), {
-    isDeleted: false, restoredAt: serverTimestamp(), restoredBy: actorUid,
-  });
+  const restoreFields = { isDeleted: false, restoredAt: serverTimestamp(), restoredBy: actorUid };
+  batch.update(doc(db, 'patients', bill.patientId, 'transactions', bill.id), restoreFields);
+  if (bill.billId) batch.update(doc(db, 'bills', bill.billId), restoreFields);
   billAudit(batch, 'restoreBill', bill.patientId, bill, actorUid, false);
   await batch.commit();
 }
@@ -103,23 +107,12 @@ export function useTrashedStaff(enabled = true) {
   return { staff, loaded };
 }
 
-// Live list of trashed patients. `ids` is what list/total screens use to leave out a
-// trashed patient's bills, sessions and settlements.
+// Live list of trashed patients (shared listener — the sidebar keeps it open, so every
+// screen that needs it reuses the same data). `ids` is what list/total screens use to
+// leave out a trashed patient's bills, sessions and settlements.
 export function useTrashedPatients() {
-  const [trashed, setTrashed] = useState([]);
-  const [loaded, setLoaded] = useState(false);
-  useEffect(
-    () =>
-      onSnapshot(
-        query(collection(db, 'patients'), where('isDeleted', '==', true)),
-        (snap) => {
-          setTrashed(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-          setLoaded(true);
-        },
-        () => setLoaded(true)
-      ),
-    []
-  );
+  const { data, loaded } = useLiveSource(SOURCES.trashedPatients);
+  const trashed = useMemo(() => data || [], [data]);
   const ids = useMemo(() => new Set(trashed.map((p) => p.id)), [trashed]);
   return { trashed, ids, loaded };
 }

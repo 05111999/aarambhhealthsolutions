@@ -1,28 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
-import { collection, collectionGroup, onSnapshot } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
+import { useMemo } from 'react';
+import { useLiveSources } from '../data/liveStore';
+import { SOURCES } from '../data/sources';
+
+const SPECS = { transactions: SOURCES.transactions, patients: SOURCES.patients };
 
 // Every transaction across all patients (live), plus a patient lookup for names/codes.
+// Both come from the shared live store, so the notification bell's transactions listener
+// and the dashboard's data are reused rather than downloaded again.
 export function useLedgerData() {
-  const [transactions, setTransactions] = useState(null);
-  const [patients, setPatients] = useState(new Map());
-  const [error, setError] = useState('');
+  const live = useLiveSources(SPECS);
+  const transactions = live.transactions.data;
+  const patientRows = live.patients.data;
+  const error = live.transactions.error ? 'Could not load transactions.' : '';
 
-  useEffect(() => {
-    const unsubscribe = onSnapshot(
-      collectionGroup(db, 'transactions'),
-      (snap) => setTransactions(snap.docs.map((d) => ({ id: d.id, patientId: d.ref.parent.parent.id, ...d.data() }))),
-      () => setError('Could not load transactions.')
-    );
-    return unsubscribe;
-  }, []);
-
-  useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'patients'), (snap) => {
-      setPatients(new Map(snap.docs.map((d) => [d.id, { id: d.id, ...d.data() }])));
-    });
-    return unsubscribe;
-  }, []);
+  const patients = useMemo(() => new Map((patientRows || []).map((p) => [p.id, p])), [patientRows]);
 
   // Trashed bills, and every bill of a trashed patient, are left out of every
   // ledger-wide view and total.

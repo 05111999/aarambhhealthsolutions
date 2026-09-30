@@ -29,6 +29,7 @@ const DEFAULT_ROLE_DEFAULTS = {
     billing: { view: true, create: true, discount: true, recordPayment: true, backdate: true },
     hospitalSettlement: { view: true, manage: false },
     inquiries: { view: true, manage: true },
+    bills: { view: true, create: true },
     sessionLogs: { view: true, create: true, manage: true },
   },
   receptionist: {
@@ -40,6 +41,7 @@ const DEFAULT_ROLE_DEFAULTS = {
     hospitalSettlement: { view: false, manage: false },
     // Receptionists are explicitly the front-line staff for public inquiries.
     inquiries: { view: true, manage: true },
+    bills: { view: true, create: true },
     sessionLogs: { view: true, create: true, manage: false },
   },
   therapist: {
@@ -54,6 +56,7 @@ const DEFAULT_ROLE_DEFAULTS = {
     billing: { view: false, create: false, discount: false, recordPayment: false, backdate: false },
     hospitalSettlement: { view: false, manage: false },
     inquiries: { view: false, manage: false },
+    bills: { view: true, create: true },
     sessionLogs: { view: true, create: true, manage: false },
   },
 };

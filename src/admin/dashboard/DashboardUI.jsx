@@ -9,20 +9,20 @@ export const StatLink = ({ to, label, value, hint, tone = 'text-text-dark', icon
   <Link
     to={to}
     aria-label={`${label}: ${value}${hint ? ` — ${hint}` : ''}`}
-    className={`group block bg-white rounded-2xl border border-border p-5 cursor-pointer transition-all duration-200 hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5 hover:-translate-y-0.5 ${focusRing}`}
+    className={`group block min-w-0 bg-white rounded-2xl border border-border p-3.5 sm:p-5 cursor-pointer transition-all duration-200 hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5 hover:-translate-y-0.5 ${focusRing}`}
   >
     <div className="flex items-start justify-between gap-2">
       <div className="flex items-start gap-2 min-w-0">
         {Icon && <Icon size={14} className="text-text-muted group-hover:text-primary transition-colors shrink-0" />}
-        <p className="text-xs font-medium text-text-muted leading-snug">{label}</p>
+        <p className="text-xs font-medium text-text-muted leading-snug min-w-0 [overflow-wrap:anywhere]">{label}</p>
       </div>
       <ArrowUpRight
         size={14}
         className="text-text-muted opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 group-hover:text-primary transition-all shrink-0"
       />
     </div>
-    <p className={`text-2xl font-bold mt-1.5 ${tone}`}>{value}</p>
-    {hint && <p className="text-xs text-text-muted mt-1 group-hover:text-primary transition-colors">{hint}</p>}
+    <p className={`text-xl sm:text-2xl font-bold mt-1.5 [overflow-wrap:anywhere] ${tone}`}>{value}</p>
+    {hint && <p className="text-xs text-text-muted mt-1 group-hover:text-primary transition-colors [overflow-wrap:anywhere]">{hint}</p>}
   </Link>
 );
 
@@ -61,7 +61,7 @@ export const CardGrid = ({ cols = 4, children }) => {
     5: 'grid-cols-2 md:grid-cols-3 xl:grid-cols-5',
     6: 'grid-cols-2 md:grid-cols-3 xl:grid-cols-6',
   }[cols];
-  return <div className={`grid ${colClass} gap-4`}>{children}</div>;
+  return <div className={`grid ${colClass} gap-3 sm:gap-4`}>{children}</div>;
 };
 
 // A summary box whose individual rows each link somewhere (e.g. top services).

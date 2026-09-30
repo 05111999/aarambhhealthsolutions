@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { collection, collectionGroup, onSnapshot } from 'firebase/firestore';
 import { ClipboardList, ChevronRight, X } from 'lucide-react';
-import { db } from '../../lib/firebase';
+import { useLiveSources } from '../data/liveStore';
+import { SOURCES } from '../data/sources';
 import { useAuth } from '../auth/AuthContext';
 import { useUrlFilters } from '../useUrlFilters';
 import { SESSION_TYPE_OPTIONS, SESSION_TYPE_LABELS } from '../patients/sessionTypes';
@@ -29,30 +29,19 @@ function inRange(date, range) {
   return true;
 }
 
+const SPECS = { sessionLogs: SOURCES.sessionLogs, patients: SOURCES.patients };
+
 // Every patient's session logs in one place — the landing page for the dashboard's
 // "Therapy Sessions" cards. Logging itself still happens on each patient's profile.
 const SessionsPage = () => {
   const { user } = useAuth();
   const [filters, setFilters, isDefaultFilters] = useUrlFilters(FILTER_DEFAULTS);
-  const [logs, setLogs] = useState(null);
-  const [patients, setPatients] = useState(new Map());
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    const unsubscribe = onSnapshot(
-      collectionGroup(db, 'sessionLogs'),
-      (snap) => setLogs(snap.docs.map((d) => ({ id: d.id, patientId: d.ref.parent.parent.id, ...d.data() }))),
-      () => setError('Could not load session logs.')
-    );
-    return unsubscribe;
-  }, []);
-
-  useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'patients'), (snap) => {
-      setPatients(new Map(snap.docs.map((d) => [d.id, { id: d.id, ...d.data() }])));
-    });
-    return unsubscribe;
-  }, []);
+  // Shared live sources — the dashboard's session and patient data are reused.
+  const live = useLiveSources(SPECS);
+  const logs = live.sessionLogs.data;
+  const patientRows = live.patients.data;
+  const error = live.sessionLogs.error ? 'Could not load session logs.' : '';
+  const patients = useMemo(() => new Map((patientRows || []).map((p) => [p.id, p])), [patientRows]);
 
   const visible = useMemo(() => {
     if (!logs) return [];

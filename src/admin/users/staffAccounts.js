@@ -54,7 +54,12 @@ function auditEntry(batch, action, targetId, actorUid, before, after) {
 const profileFields = (form) => ({
   name: form.name.trim(),
   role: form.role,
+  phone: (form.phone || '').trim(),
+  address: (form.address || '').trim(),
+  // Qualification is asked for therapists only (it prints on bills as the physician's).
+  qualification: form.role === 'therapist' ? (form.qualification || '').trim() : '',
   assignedDepartments: form.assignedDepartments || [],
+  assignedDepartmentIds: form.assignedDepartmentIds || [],
   permissions: form.permissions || {},
 });
 
@@ -63,7 +68,7 @@ export async function findUserByEmail(email) {
   return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
 }
 
-// Returns { created: true } or { restorable: existingUser } when the email belongs to
+// Returns { created: true, uid } or { restorable: existingUser } when the email belongs to
 // a previously deleted account (the caller then offers restoreStaffAccount).
 export async function createStaffAccount(form, actorUid) {
   const email = normalizeEmail(form.email);
@@ -107,7 +112,7 @@ export async function createStaffAccount(form, actorUid) {
   }
 
   await sendSetupEmail(email);
-  return { created: true };
+  return { created: true, uid };
 }
 
 export async function restoreStaffAccount(existing, form, actorUid) {
@@ -121,7 +126,8 @@ export async function restoreStaffAccount(existing, form, actorUid) {
 
 export async function updateStaffAccount(target, form, actorUid) {
   const before = {
-    name: target.name, role: target.role, assignedDepartments: target.assignedDepartments || [], permissions: target.permissions || {},
+    name: target.name, role: target.role, phone: target.phone || '', address: target.address || '', qualification: target.qualification || '',
+    assignedDepartments: target.assignedDepartments || [], permissions: target.permissions || {},
   };
   const after = profileFields(form);
   const batch = writeBatch(db);
